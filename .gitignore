@@ -7,3 +7,5 @@ venv/
 .DS_Store
 Thumbs.db
 
+# Local server source snapshots and generated inspection artifacts.
+/.local/
