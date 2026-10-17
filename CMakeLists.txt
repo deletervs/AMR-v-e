@@ -42,6 +42,28 @@ endif()
 # 保存 RS_WARNING_OPTIONS 的参数到静态库
 target_compile_options(amr_state PRIVATE ${RS_WARNING_OPTIONS})
 
+#[[
+----该部分为演示----
+]]
+
+find_package(Threads REQUIRED) # Threads 是查找系统线程支持的 CMake 模块
+
+# 构建模拟状态演示程序
+add_executable(
+    mock_robot_state
+    cpp/apps/mock_robot_state.cpp
+)
+
+# 使用已有的状态处理库 amr_state 及其公共头文件
+target_link_libraries(mock_robot_state PRIVATE amr_state Threads::Threads)
+
+# 为模拟程序启用编译警告
+target_compile_options(mock_robot_state PRIVATE ${RS_WARNING_OPTIONS})
+
+#[[
+----该部分为测试----
+]]
+
 # 开启测试登记功能
 enable_testing()
 
@@ -59,6 +81,22 @@ foreach(test_name IN ITEMS robot_state data_freshness battery_state)
     )
     add_test(NAME test_${test_name} COMMAND test_${test_name}) # 登记该程序为测试
 endforeach()
+
+find_package(Python3 3.8 REQUIRED COMPONENTS Interpreter)
+
+add_test(
+    NAME test_mock_robot_state_output
+    COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/cpp/tests/test_mock_robot_state_output.py"
+        "$<TARGET_FILE:mock_robot_state>"
+)
+
+add_test(
+    NAME test_mock_robot_stream
+    COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/cpp/tests/test_mock_robot_stream.py"
+        "$<TARGET_FILE:mock_robot_state>"
+)
 
 
 #[[
