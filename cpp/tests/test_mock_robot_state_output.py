@@ -65,4 +65,25 @@ check(
     "Stale snapshot must preserve the last voltage",
 )
 
+fields = ("x_m", "y_m", "yaw_rad", "linear_x_mps", "linear_y_mps", "angular_z_radps")
+for record, (_, quality, _) in zip(records, expected):
+    odometry = record["odometry"]
+    check(odometry["quality"] == quality, "Unexpected odometry quality")
+    reading = odometry["reading"]
+    if quality == "Unknown":
+        check(reading is None, "Startup odometry must be null")
+    else:
+        check(isinstance(reading, dict), "Odometry reading must be a complete object")
+        for name in fields:
+            check(type(reading[name]) in (int, float) and math.isfinite(reading[name]),
+                  "Odometry must contain finite numeric fields")
+check(all(value == 0 for value in records[1]["odometry"]["reading"].values()),
+      "An all-zero reading must be present and valid")
+check(records[2]["odometry"]["reading"] == records[1]["odometry"]["reading"],
+      "Stale odometry must preserve the sample")
+recovered = records[3]["odometry"]["reading"]
+for name, value in zip(fields, (1.0, -0.5, math.pi / 4, 0.25, 0.0, 0.2)):
+    check(math.isclose(recovered[name], value, rel_tol=1e-12, abs_tol=1e-12),
+          "Recovered odometry has incorrect " + name)
+
 print("mock output test passed")

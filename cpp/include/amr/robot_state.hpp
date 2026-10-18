@@ -7,6 +7,7 @@
 1. 数据质量
 2. 电池状态
 3. 机器人状态 (major)
+4. 里程计
 
 */
 namespace amr
@@ -27,11 +28,29 @@ namespace amr
         std::optional<std::chrono::steady_clock::time_point> received_at{std::nullopt}; //是否接受到电压读数
     };
 
+        struct OdometryReading
+    {
+        double x_m{0.0};
+        double y_m{0.0};
+        double yaw_rad{0.0};
+        double linear_x_mps{0.0};
+        double linear_y_mps{0.0};
+        double angular_z_radps{0.0};
+    };
+
+    struct OdometryState
+    {
+        std::optional<OdometryReading> reading{std::nullopt};
+        DataQuality quality{DataQuality::Unknown};
+        std::optional<std::chrono::steady_clock::time_point> received_at{std::nullopt};
+    };
+
     struct RobotState
     {
         bool connected{false}; //初始化一般用{}
         bool motion_enabled{false};
         BatteryState battery{};
+        OdometryState odometry{};
     };
 
 } // namespace amr

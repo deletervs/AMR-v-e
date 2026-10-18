@@ -30,11 +30,12 @@ if (liveMode) {
         view.reload.disabled = false;
         view["connection-detail"].textContent = "当前状态不可用";
         view["quality-detail"].textContent = "上游不可用 · 不显示旧帧为有效";
+        view["odom-detail"].textContent = "当前状态不可用 · 等待新数据";
     }
 
     function validateEnvelope(value) {
         const stream = value && value.stream;
-        if (!value || value.api_version !== 1 || !stream || typeof stream.id !== "string" ||
+        if (!value || value.api_version !== 2 || !stream || typeof stream.id !== "string" ||
             !Number.isSafeInteger(stream.sequence) || stream.sequence < 0 ||
             !["starting", "live", "stale", "stopped", "error"].includes(stream.status) ||
             !(stream.age_ms === null || (Number.isSafeInteger(stream.age_ms) && stream.age_ms >= 0))) {
@@ -88,7 +89,7 @@ if (liveMode) {
                 view["frame-count"].textContent = `已接收 ${sequence} 份`;
                 view["playback-badge"].textContent = "接收中";
                 view["playback-badge"].classList.add("badge-blue");
-                view.status.textContent = `持续模拟中 · 上游读数距接收约 ${stream.age_ms} ms。传输年龄与电池质量分别判断。`;
+                view.status.textContent = `持续模拟中 · 上游读数距接收约 ${stream.age_ms} ms。传输年龄与各传感器质量分别判断。`;
                 view.status.dataset.error = "false";
                 view["raw-state"].textContent = JSON.stringify(envelope, null, 2);
                 view.reload.disabled = false;

@@ -18,7 +18,10 @@ spec = importlib.util.spec_from_file_location("dashboard_service", ROOT / "tools
 service = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(service)
 FRAME = {"source": "mock", "sim_time_ms": 0, "connected": False, "motion_enabled": False,
-         "battery": {"voltage_v": None, "quality": "Unknown"}}
+         "battery": {"voltage_v": None, "quality": "Unknown"},
+         "odometry": {"reading": None, "quality": "Unknown"}}
+READING = {"x_m": 0.0, "y_m": 0.0, "yaw_rad": 0.0, "linear_x_mps": 0.0,
+           "linear_y_mps": 0.0, "angular_z_radps": 0.0}
 
 
 class BufferTests(unittest.TestCase):
@@ -35,6 +38,7 @@ class BufferTests(unittest.TestCase):
     def test_transport_expiry_preserves_sensor_quality(self):
         frame = copy.deepcopy(FRAME)
         frame["battery"] = {"voltage_v": 22.2, "quality": "Valid"}
+        frame["odometry"] = {"reading": dict(READING), "quality": "Stale"}
         self.buffer.publish(frame)
         self.now = 1.999
         self.assertEqual(self.buffer.snapshot()["stream"]["status"], "live")
@@ -43,6 +47,7 @@ class BufferTests(unittest.TestCase):
         self.assertEqual(snapshot["stream"]["status"], "stale")
         self.assertEqual(snapshot["stream"]["age_ms"], 2000)
         self.assertEqual(snapshot["state"]["battery"], frame["battery"])
+        self.assertEqual(snapshot["state"]["odometry"], frame["odometry"])
 
     def test_sequence_copy_and_generation(self):
         self.buffer.publish(FRAME)
@@ -60,6 +65,46 @@ class BufferTests(unittest.TestCase):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 self.buffer.publish(dict(FRAME, **changes))
         self.assertEqual(self.buffer.snapshot()["stream"]["sequence"], 0)
+
+    def test_zero_and_negative_odometry_values(self):
+        frame = copy.deepcopy(FRAME)
+        frame["odometry"] = {"reading": dict(READING), "quality": "Valid"}
+        self.buffer.publish(frame)
+        self.assertEqual(self.buffer.snapshot()["state"]["odometry"]["reading"], READING)
+        frame["sim_time_ms"] = 1
+        frame["odometry"]["reading"]["x_m"] = -2.5
+        self.buffer.publish(frame)
+        self.assertEqual(self.buffer.snapshot()["state"]["odometry"]["reading"]["x_m"], -2.5)
+
+    def test_reject_invalid_odometry_fields(self):
+        invalid = [None, {}, {"quality": [], "reading": None},
+                   {"quality": "Invalid", "reading": None},
+                   {"quality": "Valid", "reading": []},
+                   {"quality": "Valid", "reading": {"x_m": 0}}]
+        for field in READING:
+            for bad in (float("nan"), float("inf"), -float("inf"), True, "0", None, 10 ** 400):
+                reading = dict(READING)
+                reading[field] = bad
+                invalid.append({"quality": "Valid", "reading": reading})
+        for odometry in invalid:
+            with self.subTest(odometry=odometry), self.assertRaises(ValueError):
+                self.buffer.publish(dict(FRAME, odometry=odometry))
+        self.assertEqual(self.buffer.snapshot()["stream"]["sequence"], 0)
+
+    def test_odometry_quality_and_missing_sample(self):
+        for quality in ("Valid", "Stale"):
+            with self.subTest(quality=quality), self.assertRaises(ValueError):
+                self.buffer.publish(dict(FRAME, odometry={"reading": None, "quality": quality}))
+        for index, quality in enumerate(("Unknown", "Fault", "Unsupported")):
+            self.buffer.publish(dict(FRAME, sim_time_ms=index,
+                                     odometry={"reading": None, "quality": quality}))
+            self.assertIsNone(self.buffer.snapshot()["state"]["odometry"]["reading"])
+
+    def test_legacy_frame_requires_rebuilt_producer(self):
+        legacy = copy.deepcopy(FRAME)
+        del legacy["odometry"]
+        with self.assertRaisesRegex(ValueError, "rebuild"):
+            self.buffer.publish(legacy)
 
     def test_nonincreasing_time_rejected(self):
         self.buffer.publish(FRAME)
@@ -96,7 +141,10 @@ class HttpTests(unittest.TestCase):
         for _ in range(2):
             with urllib.request.urlopen(self.base + "api/state", timeout=2) as response:
                 self.assertEqual(response.headers["Cache-Control"], "no-store")
-                self.assertEqual(json.load(response)["stream"]["sequence"], 1)
+                snapshot = json.load(response)
+                self.assertEqual(snapshot["api_version"], 2)
+                self.assertEqual(snapshot["stream"]["sequence"], 1)
+                self.assertEqual(snapshot["state"]["odometry"], FRAME["odometry"])
         for asset in ("", "app.js", "live.js", "styles.css", "state.ndjson"):
             with urllib.request.urlopen(self.base + asset, timeout=2) as response:
                 self.assertEqual(response.status, 200)
@@ -148,9 +196,11 @@ class ProducerTests(unittest.TestCase):
             env["PATH"] = "C:/msys64/ucrt64/bin" + os.pathsep + env.get("PATH", "")
         producer = service.MockProducer([str(MOCK_EXECUTABLE), "--stream"], buffer, env)
         observed = []
+        odometry_observed = []
+        independent_recovery = False
         last_sequence = 0
         try:
-            deadline = time.monotonic() + 6
+            deadline = time.monotonic() + 8
             while time.monotonic() < deadline:
                 snapshot = buffer.snapshot()
                 if snapshot["stream"]["sequence"] > last_sequence:
@@ -158,10 +208,18 @@ class ProducerTests(unittest.TestCase):
                     quality = snapshot["state"]["battery"]["quality"]
                     if not observed or observed[-1] != quality:
                         observed.append(quality)
-                    if observed == ["Unknown", "Valid", "Stale", "Valid"]:
+                    odometry = snapshot["state"]["odometry"]
+                    if not odometry_observed or odometry_observed[-1] != odometry["quality"]:
+                        odometry_observed.append(odometry["quality"])
+                    independent_recovery |= quality == "Stale" and odometry["quality"] == "Valid"
+                    if (observed == ["Unknown", "Valid", "Stale", "Valid"]
+                            and odometry_observed == ["Unknown", "Valid", "Stale", "Valid"]
+                            and independent_recovery):
                         break
                 time.sleep(0.02)
             self.assertEqual(observed, ["Unknown", "Valid", "Stale", "Valid"])
+            self.assertEqual(odometry_observed, ["Unknown", "Valid", "Stale", "Valid"])
+            self.assertTrue(independent_recovery)
         finally:
             producer.close()
 
