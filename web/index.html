@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#101319">
+    <title>RS · 机器人状态总览</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="./styles.css">
+    <script src="./app.js" defer></script>
+    <script src="./live.js" defer></script>
+</head>
+<body>
+    <aside class="sidebar" aria-label="项目导航">
+        <a class="brand" href="#dashboard" aria-label="RS 状态总览">
+            <span class="brand-mark" aria-hidden="true">R<span>•</span></span>
+            <span>RS<span class="brand-caption">ROBOT SYSTEM</span></span>
+        </a>
+        <p class="nav-caption">工作空间</p>
+        <a class="nav-item" href="#dashboard" aria-current="page"><span aria-hidden="true">◈</span> 状态总览 <span class="nav-count">01</span></a>
+        <div class="milestones">
+            <p class="nav-caption">开发蓝图</p>
+            <ol>
+                <li class="current"><span>M1</span> 离线原型 <small>当前</small></li>
+                <li><span>M2</span> 真实监控</li>
+                <li><span>M3</span> 模拟遥控</li>
+                <li><span>M4</span> 真实遥控</li>
+                <li><span>M5</span> 设备与开关机</li>
+                <li><span>M6</span> 远程上线</li>
+                <li><span>M7</span> 整体验收</li>
+            </ol>
+        </div>
+        <div class="sidebar-footer"><span class="small-dot"></span> 本地开发环境<br><small>M1-005A / 状态记录回放</small></div>
+    </aside>
+
+    <main id="dashboard">
+        <div class="topbar"><span>控制台 <span class="slash">/</span> 状态总览</span><span id="mode-badge" class="badge badge-blue">MOCK · 离线回放</span></div>
+        <header class="page-heading">
+            <div><p class="eyebrow">ROBOT OBSERVABILITY</p><h1>状态总览<span class="heading-dot">.</span></h1><p class="subtitle">从一份状态记录，观察机器人的每一次变化。</p></div>
+            <button id="reload" class="button button-secondary" type="button">重新加载记录 <span aria-hidden="true">↻</span></button>
+        </header>
+
+        <div class="notice"><span class="notice-icon" aria-hidden="true">i</span><p id="notice-copy"><strong>你正在查看模拟记录。</strong> 数据由 C++ 程序生成，当前页面用于离线回放；连接、运动状态均为模拟值。</p><span class="notice-source">source: mock</span></div>
+
+        <nav class="mode-switch" aria-label="数据模式"><a href="./" id="replay-link">离线回放</a><a href="./?mode=live" id="live-link">持续模拟</a></nav>
+
+        <section class="metric-grid" aria-label="机器人状态">
+            <article class="metric-card"><div class="metric-label">模拟连接 <span aria-hidden="true">↗</span></div><div class="metric-value" id="connected">—</div><div class="metric-foot"><span class="indicator" id="connection-dot"></span><span id="connection-detail">等待记录</span></div></article>
+            <article class="metric-card"><div class="metric-label">电池电压 <span>VOLTAGE</span></div><div class="metric-value"><span id="voltage">—</span><span class="unit">V</span></div><div class="metric-foot" id="voltage-detail">没有读数时保持未知</div></article>
+            <article class="metric-card"><div class="metric-label">电池数据质量 <span aria-hidden="true">◎</span></div><div class="metric-value quality-value" id="quality" data-quality="Unknown">未知</div><div class="metric-foot" id="quality-detail">Unknown · 尚无数据</div></article>
+            <article class="metric-card"><div class="metric-label">运动使能 <span aria-hidden="true">◇</span></div><div class="metric-value" id="motion">—</div><div class="metric-foot"><span class="indicator"></span><span>本阶段保持禁用</span></div></article>
+        </section>
+
+        <div class="detail-grid">
+            <section class="panel chart-panel" aria-labelledby="chart-title">
+                <div class="panel-heading"><div><p class="eyebrow">BATTERY TELEMETRY</p><h2 id="chart-title">电压变化</h2></div><span class="chart-legend"><span></span> 模拟电压 / V</span></div>
+                <div class="chart-wrap">
+                    <div class="chart-axis" aria-hidden="true"><span id="axis-max">25</span><span id="axis-mid">12.5</span><span>0</span></div>
+                    <svg id="voltage-chart" viewBox="0 0 640 180" role="img" aria-labelledby="chart-title chart-description">
+                        <desc id="chart-description">仅展示已经回放的电压读数。过期时保留旧数值。</desc>
+                        <defs><linearGradient id="line-gradient" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stop-color="#7598ff"/><stop offset="100%" stop-color="#83d7d0"/></linearGradient></defs>
+                        <g class="chart-grid"><path d="M 16 20 H 624 M 16 85 H 624 M 16 150 H 624"/><path d="M 16 20 V 150 M 168 20 V 150 M 320 20 V 150 M 472 20 V 150 M 624 20 V 150"/></g>
+                        <path id="chart-line" class="chart-line" d=""/>
+                        <line id="chart-cursor" x1="16" x2="16" y1="20" y2="150" class="chart-cursor"/>
+                        <circle id="chart-dot" r="4.5" cx="16" cy="150" visibility="hidden"/>
+                    </svg>
+                    <span id="chart-empty" class="chart-empty">尚无电压读数</span>
+                </div>
+                <div class="chart-times"><span id="time-start">0.0 s</span><span id="time-end">—</span></div>
+                <p class="panel-note">曲线保留过期读数；有效性以 C++ 输出的质量状态为准。</p>
+            </section>
+
+            <section class="panel playback-panel" aria-labelledby="playback-title">
+                <div class="panel-heading"><div><p class="eyebrow">RECORD PLAYER</p><h2 id="playback-title">回放控制</h2></div><span id="playback-badge" class="badge">加载中</span></div>
+                <div class="playback-time"><span id="sim-time">—</span><span>模拟时间 / s</span></div>
+                <label class="timeline-label" for="timeline">回放位置 <span id="frame-count">— / —</span></label>
+                <input id="timeline" type="range" min="0" max="0" value="0" step="1" disabled>
+                <div class="playback-buttons"><button class="button button-primary" id="toggle" type="button" disabled>暂停回放</button><button class="button button-secondary" id="restart" type="button" disabled>从头回放 <span aria-hidden="true">↶</span></button></div>
+                <p class="playback-status" id="status" role="status" aria-live="polite">正在读取模拟记录……</p>
+                <div class="record-meta"><span>数据文件</span><code>state.ndjson</code></div><div class="record-meta"><span>数据来源</span><code>C++ / --stream-test</code></div>
+            </section>
+        </div>
+
+        <details class="panel raw-panel">
+            <summary><span>当前帧原始数据 <span class="raw-label">JSON</span></span><span class="summary-hint">展开查看 <span aria-hidden="true">⌄</span></span></summary>
+            <pre id="raw-state">尚未读取记录。</pre>
+        </details>
+        <footer class="page-footer"><span>RS · 机器人监控与交互控制台</span><span>先看清状态，再建立控制。</span></footer>
+        <noscript><p class="notice">请启用 JavaScript 以加载和回放状态记录。</p></noscript>
+    </main>
+</body>
+</html>
