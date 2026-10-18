@@ -16,6 +16,17 @@ import uuid
 ROOT = Path(__file__).resolve().parents[1]
 QUALITIES = {"Unknown", "Valid", "Stale", "Fault", "Unsupported"}
 MAX_LINE = 65536
+API_VERSION = 2
+ODOMETRY_FIELDS = ("x_m", "y_m", "yaw_rad", "linear_x_mps", "linear_y_mps", "angular_z_radps")
+
+
+def finite_number(value):
+    if type(value) not in (int, float):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
 
 
 def validate_frame(frame):
@@ -29,8 +40,19 @@ def validate_frame(frame):
             or "voltage_v" not in battery):
         raise ValueError("invalid mock state fields")
     voltage = battery["voltage_v"]
-    if voltage is not None and (type(voltage) not in (int, float) or not math.isfinite(voltage)):
+    if voltage is not None and not finite_number(voltage):
         raise ValueError("invalid voltage")
+    odometry = frame.get("odometry")
+    if (not isinstance(odometry, dict) or type(odometry.get("quality")) is not str
+            or odometry["quality"] not in QUALITIES or "reading" not in odometry):
+        raise ValueError("invalid odometry fields; rebuild the mock producer")
+    reading = odometry["reading"]
+    if reading is None:
+        if odometry["quality"] in ("Valid", "Stale"):
+            raise ValueError("usable odometry quality requires a reading")
+    elif (not isinstance(reading, dict)
+          or any(not finite_number(reading.get(name)) for name in ODOMETRY_FIELDS)):
+        raise ValueError("odometry must contain six finite numbers")
 
 
 class StateBuffer:
@@ -72,7 +94,7 @@ class StateBuffer:
             age_s = max(0.0, now - (self._received if self._received is not None else self._started))
             status = self._terminal or ("stale" if age_s >= self._stale_after
                                        else "live" if self._state is not None else "starting")
-            return {"api_version": 1, "stream": {
+            return {"api_version": API_VERSION, "stream": {
                 "id": self.stream_id, "status": status, "sequence": self._sequence,
                 "age_ms": int(age_s * 1000) if self._received is not None else None,
                 "message": self._message

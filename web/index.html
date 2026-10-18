@@ -30,7 +30,7 @@
                 <li><span>M7</span> 整体验收</li>
             </ol>
         </div>
-        <div class="sidebar-footer"><span class="small-dot"></span> 本地开发环境<br><small>M1-005A / 状态记录回放</small></div>
+        <div class="sidebar-footer"><span class="small-dot"></span> 本地开发环境<br><small>M1-005C / 模拟状态仪表盘</small></div>
     </aside>
 
     <main id="dashboard">
@@ -51,6 +51,20 @@
             <article class="metric-card"><div class="metric-label">运动使能 <span aria-hidden="true">◇</span></div><div class="metric-value" id="motion">—</div><div class="metric-foot"><span class="indicator"></span><span>本阶段保持禁用</span></div></article>
         </section>
 
+        <section class="panel odometry-panel" id="odometry-panel" data-quality="Unknown" aria-labelledby="odometry-title">
+            <div class="panel-heading"><div><p class="eyebrow">ODOMETRY</p><h2 id="odometry-title">位置与运动状态</h2></div><span class="badge" id="odom-quality" data-quality="Unknown">未知 · Unknown</span></div>
+            <div class="odometry-grid">
+                <div class="odometry-metric"><h3>X 位置 <span>odom</span></h3><div class="odometry-value"><span id="odom-x">—</span><small>m</small></div></div>
+                <div class="odometry-metric"><h3>Y 位置 <span>odom</span></h3><div class="odometry-value"><span id="odom-y">—</span><small>m</small></div></div>
+                <div class="odometry-metric"><h3>朝向 yaw</h3><div class="odometry-value"><span id="odom-yaw">—</span><small>°</small></div><p id="odom-yaw-raw">原始 yaw：— rad</p></div>
+                <div class="odometry-metric"><h3>前向速度 <span>车体 X</span></h3><div class="odometry-value"><span id="odom-vx">—</span><small>m/s</small></div></div>
+                <div class="odometry-metric"><h3>左向速度 <span>车体 Y</span></h3><div class="odometry-value"><span id="odom-vy">—</span><small>m/s</small></div></div>
+                <div class="odometry-metric"><h3>转向角速度 <span>车体 Z</span></h3><div class="odometry-value"><span id="odom-wz">—</span><small>rad/s</small></div></div>
+            </div>
+            <p class="odometry-status" id="odom-detail" role="status">尚未收到里程计读数</p>
+            <p class="panel-note">位置与朝向相对局部 odom 原点，速度以车体坐标表示。正 yaw 从上方看为逆时针。全部为模拟数据。</p>
+        </section>
+
         <div class="detail-grid">
             <section class="panel chart-panel" aria-labelledby="chart-title">
                 <div class="panel-heading"><div><p class="eyebrow">BATTERY TELEMETRY</p><h2 id="chart-title">电压变化</h2></div><span class="chart-legend"><span></span> 模拟电压 / V</span></div>
@@ -58,7 +72,7 @@
                     <div class="chart-axis" aria-hidden="true"><span id="axis-max">25</span><span id="axis-mid">12.5</span><span>0</span></div>
                     <svg id="voltage-chart" viewBox="0 0 640 180" role="img" aria-labelledby="chart-title chart-description">
                         <desc id="chart-description">仅展示已经回放的电压读数。过期时保留旧数值。</desc>
-                        <defs><linearGradient id="line-gradient" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stop-color="#7598ff"/><stop offset="100%" stop-color="#83d7d0"/></linearGradient></defs>
+                        <defs><linearGradient id="line-gradient" gradientUnits="userSpaceOnUse" x1="16" y1="0" x2="624" y2="0"><stop offset="0%" stop-color="#7598ff"/><stop offset="100%" stop-color="#83d7d0"/></linearGradient></defs>
                         <g class="chart-grid"><path d="M 16 20 H 624 M 16 85 H 624 M 16 150 H 624"/><path d="M 16 20 V 150 M 168 20 V 150 M 320 20 V 150 M 472 20 V 150 M 624 20 V 150"/></g>
                         <path id="chart-line" class="chart-line" d=""/>
                         <line id="chart-cursor" x1="16" x2="16" y1="20" y2="150" class="chart-cursor"/>

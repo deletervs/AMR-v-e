@@ -1,6 +1,6 @@
 "use strict";
 
-// 页面只消费 C++ 的状态记录；不在浏览器中重算电池质量或控制机器人。
+// 页面消费 C++ 给出的数据质量；单位换算仅用于显示。
 const qualityInfo = {
     Unknown: ["未知", "Unknown · 尚无数据"],
     Valid: ["有效", "Valid · 读数有效"],
@@ -14,7 +14,8 @@ const view = Object.fromEntries([
     "quality", "quality-detail", "motion", "sim-time", "frame-count", "timeline",
     "toggle", "restart", "reload", "status", "playback-badge", "raw-state",
     "chart-line", "chart-cursor", "chart-dot", "chart-empty", "axis-max", "axis-mid",
-    "time-start", "time-end", "chart-description"
+    "time-start", "time-end", "chart-description", "odometry-panel", "odom-quality",
+    "odom-detail", "odom-x", "odom-y", "odom-yaw", "odom-vx", "odom-vy", "odom-wz", "odom-yaw-raw"
 ].map(id => [id, document.getElementById(id)]));
 
 const liveMode = new URLSearchParams(location.search).get("mode") === "live";
@@ -24,6 +25,40 @@ const player = { frames: [], index: 0, mode: "loading", timer: null, yMax: 25 };
 function stopTimer() {
     clearTimeout(player.timer);
     player.timer = null;
+}
+
+const odometryFields = ["x_m", "y_m", "yaw_rad", "linear_x_mps", "linear_y_mps", "angular_z_radps"];
+
+function validOdometry(odometry) {
+    if (!odometry || !Object.keys(qualityInfo).includes(odometry.quality) ||
+        !Object.prototype.hasOwnProperty.call(odometry, "reading")) return false;
+    if (odometry.reading === null) return !["Valid", "Stale"].includes(odometry.quality);
+    return typeof odometry.reading === "object" && !Array.isArray(odometry.reading) &&
+        odometryFields.every(name => typeof odometry.reading[name] === "number" &&
+            Number.isFinite(odometry.reading[name]));
+}
+
+function renderOdometry(odometry = null) {
+    const quality = odometry ? odometry.quality : "Unknown";
+    const reading = odometry ? odometry.reading : null;
+    view["odometry-panel"].dataset.quality = quality;
+    view["odom-quality"].dataset.quality = quality;
+    view["odom-quality"].textContent = qualityInfo[quality][0] + " · " + quality;
+    const metrics = { "odom-x": "x_m", "odom-y": "y_m", "odom-vx": "linear_x_mps",
+        "odom-vy": "linear_y_mps", "odom-wz": "angular_z_radps" };
+    for (const [id, field] of Object.entries(metrics)) {
+        view[id].textContent = reading === null ? "—" : reading[field].toFixed(3);
+    }
+    const degrees = reading === null ? null : reading.yaw_rad * (180 / Math.PI);
+    view["odom-yaw"].textContent = degrees === null ? "—" :
+        Number.isFinite(degrees) ? degrees.toFixed(1) : "超出显示范围";
+    view["odom-yaw-raw"].textContent = reading === null ? "原始 yaw：— rad" :
+        `原始 yaw：${reading.yaw_rad.toFixed(3)} rad`;
+    view["odom-detail"].textContent = quality === "Stale" ? "历史读数 · 已过期，等待新样本" :
+        quality === "Fault" ? "故障 · 保留样本仅供诊断" :
+        quality === "Unsupported" ? "当前设备不支持里程计" :
+        quality === "Unknown" ? (reading === null ? "尚未收到里程计读数" : "质量未知 · 保留样本仅供诊断") :
+        "模拟读数有效 · 位姿与速度来自同一份样本";
 }
 
 function parseRecord(text) {
@@ -43,6 +78,7 @@ function parseRecord(text) {
               (typeof battery.voltage_v === "number" && Number.isFinite(battery.voltage_v)))) {
             throw new Error(`第 ${index + 1} 行不符合模拟状态格式或时间顺序`);
         }
+        if (!validOdometry(frame.odometry)) throw new Error(`第 ${index + 1} 行里程计格式不兼容，请重新构建模拟程序并生成记录`);
         previousTime = frame.sim_time_ms;
         return frame;
     });
@@ -83,6 +119,7 @@ function renderChart() {
 function renderFrame() {
     const frame = player.frames[player.index];
     const battery = frame.battery;
+    renderOdometry(frame.odometry);
     view.connected.textContent = frame.connected ? "已连接" : "未连接";
     view["connection-dot"].dataset.connected = String(frame.connected);
     view["connection-detail"].textContent = frame.connected ? "模拟链路已建立" : "当前模拟场景未连接";
@@ -144,6 +181,7 @@ function play(fromStart = false) {
 }
 
 function clearFrame() {
+    renderOdometry();
     for (const id of ["connected", "voltage", "motion", "sim-time"]) view[id].textContent = "—";
     view["connection-dot"].dataset.connected = "false";
     view["connection-detail"].textContent = "等待记录";

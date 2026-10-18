@@ -2,16 +2,16 @@
 
 基于 **Taobotics Gemini 移动机器人** 的人机交互项目。仓库保留已有的手势控制演示，并以 **C++17** 逐步开发 PC/手机监控、人工遥控和设备管理能力。
 
-当前可运行的新模块是**离线状态模型、电池时效判断、JSON 模拟状态发布程序和持续模拟/回放仪表盘**。真实传感器接入、底盘遥控与开关机按下方里程碑推进。
+当前可运行的新模块是**离线状态模型、电池与里程计时效判断、JSON 模拟状态发布程序和持续模拟/回放仪表盘**。真实传感器接入、底盘遥控与开关机按下方里程碑推进。
 
 ## 当前进度
 
 更新日期：**2026-10-18**。
 
-- 当前阶段：**M1 离线原型**，M1-004 已验收合并；M1-005A 回放与 M1-005B 持续模拟已通过 Windows 与 Linux 验收，正在进行 PR 收尾。
+- 当前阶段：**M1 离线原型**，M1-004 已验收合并；M1-005A 回放与 M1-005B 持续模拟已通过 Windows 与 Linux 验收，已合并 PR #3；里程计核心、JSON与网页接入已通过 Windows 本机验收。
 - 下一项：**M1-005C，手机联机与完整属性**，继续补齐里程计、CPU/内存/温度和日志，核心模块继续按同版本验证流程交付。
-- 本轮已验收代码基线：[1ba367de2b69](https://github.com/deletervs/AMR-v-e/commit/1ba367de2b695b1dfd0b8d70e1cd542ad7a8c7ec)。Linux 同提交 **CTest 5/5、服务测试 11/11 通过**；Windows 被测源码与提交指纹一致。
-- 核心下一项：**M1-005C-01，里程计状态模型**，接口与验收已设计，核心实现待完成；测试、构建和网页由 AI 配套接入。
+- 上一轮已验收代码基线：[1ba367de2b69](https://github.com/deletervs/AMR-v-e/commit/1ba367de2b695b1dfd0b8d70e1cd542ad7a8c7ec)。Linux 同提交 **CTest 5/5、服务测试 11/11 通过**；Windows 被测源码与提交指纹一致。
+- 核心当前项：**M1-005C-01，里程计状态模型**，用户核心、模拟 JSON 和网页已接通；Windows Debug 构建及 CTest 6/6、服务测试 15/15 与实际 Edge 验收通过，本轮提交后的 Linux 同版本验收待完成。
 - M1 整体仍在进行中；目前输出均标注 `source: "mock"`，运动使能保持 `false`。
 
 ## 整体蓝图
@@ -37,9 +37,9 @@ XSS 暂按 Xbox Series 手柄理解，具体型号、按键映射和 PC/手机�
 | M1-002 数据新鲜度 | 通用时间判断、电池读数更新与质量刷新 | 通用规则和电池接入完成 |
 | M1-003 构建与测试 | CMake/CTest、Windows/Linux 同版本验证、Git/PR 流程 | 完成 |
 | M1-004 模拟状态输出 | 四场景演示、持续 JSON 发布、快速测试模式及接口验收 | 完成，已合并 PR #2 |
-| M1-005 模拟仪表盘 | 最小网页数据链路、PC/手机页面、扩充模拟属性和日志 | A/B：实现与双平台代码验收完成、PR收尾中；C：手机联机与属性待开发 |
+| M1-005 模拟仪表盘 | 最小网页数据链路、PC/手机页面、扩充模拟属性和日志 | A/B：实现与双平台代码验收完成，已合并PR #3；C：手机联机与属性待开发 |
 
-当前 `RobotState` 主要包含连接、运动使能和电池。完整仪表盘的其他字段会逐模块加入。
+当前 `RobotState` 包含连接、运动使能、电池与里程计状态；模拟 JSON 与网页均已接入里程计六个数值和独立质量。资源指标、日志和真实手机联网继续按 M1-005C 推进。
 
 ## 已实现能力与数据约定
 
@@ -54,7 +54,7 @@ XSS 暂按 Xbox Series 手柄理解，具体型号、按键映射和 PC/手机�
 输出格式为**每行一份完整 JSON 状态**，例如：
 
 ```json
-{"source":"mock","sim_time_ms":2000,"connected":true,"motion_enabled":false,"battery":{"voltage_v":2.5,"quality":"Stale"}}
+{"source":"mock","sim_time_ms":3000,"connected":true,"motion_enabled":false,"battery":{"voltage_v":2.5,"quality":"Stale"},"odometry":{"reading":{"x_m":0,"y_m":0,"yaw_rad":0,"linear_x_mps":0.25,"linear_y_mps":0,"angular_z_radps":0.2},"quality":"Valid"}}
 ```
 
 | 字段 | 含义 |
@@ -65,6 +65,12 @@ XSS 暂按 Xbox Series 手柄理解，具体型号、按键映射和 PC/手机�
 | `motion_enabled` | 运动使能，当前始终为 `false` |
 | `battery.voltage_v` | 电压，单位 V；没有读数时为 `null` |
 | `battery.quality` | 电池读数的质量状态 |
+| `odometry.reading` | 六个有限数值组成的完整样本，未收到时为 `null` |
+| `odometry.quality` | 独立的里程计质量，过期时保留样本 |
+
+里程计包含位置 `x_m/y_m`、朝向 `yaw_rad`、线速度 `linear_x_mps/linear_y_mps` 和角速度 `angular_z_radps`。位姿在局部 odom 坐标系，速度在车体坐标系；网页将朝向额外显示为角度，原始 JSON 保留弧度。合法零值与没有样本区分显示。
+
+持续模拟中：第 1 秒收到零值里程计样本，第 2 秒达到过期边界，第 3 秒里程计恢复，第 4 秒电池恢复，每 6 秒重置场景。只读状态服务采用 `api_version: 2`，旧模拟程序需要重新构建、旧服务需要重启。
 
 模拟电压只用于练习，不代表已核验的真实设备量程。持续模式每六秒重放场景，回到 `Unknown` 表示模拟场景重置。
 
@@ -75,7 +81,7 @@ XSS 暂按 Xbox Series 手柄理解，具体型号、按键映射和 PC/手机�
 ├── CMakeLists.txt                 # 根构建入口
 ├── cpp/
 │   ├── include/amr/               # 状态类型与公共接口
-│   ├── src/                       # 新鲜度和电池规则实现
+│   ├── src/                       # 新鲜度、电池和里程计规则实现
 │   ├── apps/mock_robot_state.cpp  # 离线模拟程序与运行模式
 │   └── tests/                     # C++ 规则测试、Python 输出验收
 ├── web/                          # 静态仪表盘、回放脚本和 C++ 模拟记录

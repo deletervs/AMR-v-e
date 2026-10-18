@@ -1,7 +1,10 @@
 #include "amr/battery_state.hpp"
+#include "amr/odometry_state.hpp"
 #include "amr/robot_state.hpp"
 
 #include <chrono>
+#include <cmath>
+#include <iomanip>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -46,7 +49,7 @@ namespace //匿名命名空间, 内部函数只供本文件使用
         const amr::RobotState &state,
         std::chrono::milliseconds simulated_time)
     {
-        std::cout << std::boolalpha
+        std::cout << std::boolalpha << std::setprecision(15)
                   << "{\"source\":\"mock\",\"sim_time_ms\":"
                   << simulated_time.count()
                   << ",\"connected\":" << state.connected
@@ -63,6 +66,22 @@ namespace //匿名命名空间, 内部函数只供本文件使用
 
         std::cout << ",\"quality\":\""
                   << quality_name(state.battery.quality)
+                  << "\"},\"odometry\":{\"reading\":";
+        if (state.odometry.reading.has_value())
+        {
+            const auto &reading = state.odometry.reading.value();
+            std::cout << "{\"x_m\":" << reading.x_m
+                      << ",\"y_m\":" << reading.y_m
+                      << ",\"yaw_rad\":" << reading.yaw_rad
+                      << ",\"linear_x_mps\":" << reading.linear_x_mps
+                      << ",\"linear_y_mps\":" << reading.linear_y_mps
+                      << ",\"angular_z_radps\":" << reading.angular_z_radps << "}";
+        }
+        else
+        {
+            std::cout << "null";
+        }
+        std::cout << ",\"quality\":\"" << quality_name(state.odometry.quality)
                   << "\"}}\n";
     }
 
@@ -94,6 +113,23 @@ namespace //匿名命名空间, 内部函数只供本文件使用
             amr::update_battery_reading(state.battery, 22.2, now);
         }
 
+        // 里程计在第3秒恢复，电池在第4秒恢复；两种数据质量独立判断。
+        if (phase_ms < 3000)
+        {
+            amr::update_odometry_reading(
+                state.odometry, amr::OdometryReading{}, now - Ms{phase_ms} + Ms{1000});
+        }
+        else
+        {
+            // 以0.25 m/s和0.2 rad/s模拟圆弧运动；不向真实底盘发送命令。
+            const double seconds = (phase_ms - 3000) / 1000.0;
+            const double yaw = seconds * 0.2;
+            const amr::OdometryReading reading{
+                1.25 * std::sin(yaw), 1.25 * (1.0 - std::cos(yaw)),
+                yaw, 0.25, 0.0, 0.2};
+            amr::update_odometry_reading(state.odometry, reading, now);
+        }
+        amr::refresh_odometry_quality(state.odometry, now, Ms{1000});
         amr::refresh_battery_quality(state.battery, now, Ms{1000});
         return state;
     }
@@ -153,17 +189,24 @@ int run_scenario()
     state.connected = true;
     amr::update_battery_reading(
         state.battery, 2.5, start + Milliseconds{100});
+    amr::update_odometry_reading(
+        state.odometry, amr::OdometryReading{}, start + Milliseconds{100});
     print_state_json(state, Milliseconds{100});
 
     // 到 1100 ms 时，读数年龄恰好达到超时阈值
     amr::refresh_battery_quality(
         state.battery, start + Milliseconds(1100), timeout);
+    amr::refresh_odometry_quality(
+        state.odometry, start + Milliseconds{1100}, timeout);
     print_state_json(state, Milliseconds{1100});
 
     // 在 1200 ms 收到新读数，恢复有效状态
     state.connected = true;
     amr::update_battery_reading(
         state.battery, 22.2, start + Milliseconds{1200});
+    amr::update_odometry_reading(
+        state.odometry, amr::OdometryReading{1.0, -0.5, 0.7853981633974483, 0.25, 0.0, 0.2},
+        start + Milliseconds{1200});
     print_state_json(state, Milliseconds{1200});
 
     return 0;
