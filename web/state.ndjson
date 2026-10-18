@@ -1,0 +1,17 @@
+{"source":"mock","sim_time_ms":0,"connected":false,"motion_enabled":false,"battery":{"voltage_v":null,"quality":"Unknown"}}
+{"source":"mock","sim_time_ms":500,"connected":false,"motion_enabled":false,"battery":{"voltage_v":null,"quality":"Unknown"}}
+{"source":"mock","sim_time_ms":1000,"connected":true,"motion_enabled":false,"battery":{"voltage_v":2.5,"quality":"Valid"}}
+{"source":"mock","sim_time_ms":1500,"connected":true,"motion_enabled":false,"battery":{"voltage_v":2.5,"quality":"Valid"}}
+{"source":"mock","sim_time_ms":2000,"connected":true,"motion_enabled":false,"battery":{"voltage_v":2.5,"quality":"Stale"}}
+{"source":"mock","sim_time_ms":2500,"connected":true,"motion_enabled":false,"battery":{"voltage_v":2.5,"quality":"Stale"}}
+{"source":"mock","sim_time_ms":3000,"connected":true,"motion_enabled":false,"battery":{"voltage_v":2.5,"quality":"Stale"}}
+{"source":"mock","sim_time_ms":3500,"connected":true,"motion_enabled":false,"battery":{"voltage_v":2.5,"quality":"Stale"}}
+{"source":"mock","sim_time_ms":4000,"connected":true,"motion_enabled":false,"battery":{"voltage_v":22.2,"quality":"Valid"}}
+{"source":"mock","sim_time_ms":4500,"connected":true,"motion_enabled":false,"battery":{"voltage_v":22.2,"quality":"Valid"}}
+{"source":"mock","sim_time_ms":5000,"connected":true,"motion_enabled":false,"battery":{"voltage_v":22.2,"quality":"Valid"}}
+{"source":"mock","sim_time_ms":5500,"connected":true,"motion_enabled":false,"battery":{"voltage_v":22.2,"quality":"Valid"}}
+{"source":"mock","sim_time_ms":6000,"connected":false,"motion_enabled":false,"battery":{"voltage_v":null,"quality":"Unknown"}}
+{"source":"mock","sim_time_ms":6500,"connected":false,"motion_enabled":false,"battery":{"voltage_v":null,"quality":"Unknown"}}
+{"source":"mock","sim_time_ms":7000,"connected":true,"motion_enabled":false,"battery":{"voltage_v":2.5,"quality":"Valid"}}
+{"source":"mock","sim_time_ms":7500,"connected":true,"motion_enabled":false,"battery":{"voltage_v":2.5,"quality":"Valid"}}
+{"source":"mock","sim_time_ms":8000,"connected":true,"motion_enabled":false,"battery":{"voltage_v":2.5,"quality":"Stale"}}
