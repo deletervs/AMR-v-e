@@ -22,7 +22,7 @@ python tools/serve_dashboard.py
 python3 tools/serve_dashboard.py --mock-executable .local/build/linux-debug/mock_robot_state
 ```
 
-当前实测为 Windows；Linux 命令用于后续同版本验收，不能视为已经运行通过。
+上述参数方式已在 Ubuntu 20.04/GCC 9.3/Python 3.8.10 的独立同提交副本通过 CLI 实测。
 
 只看离线记录也可执行：
 
@@ -90,4 +90,4 @@ python web/tests/test_dashboard_service.py
 
 2026-10-18 Windows 本机：11 项服务测试通过；Edge 浏览器验证两客户端、实际 C++ 电池正常/过期/恢复、上游进程退出、传输超时与自动重连，原离线模式回归通过。1440/768/390/320 像素无横向溢出，桌面和手机宽度截图已检查。临时测试进程和服务已结束。
 
-当前结果针对工作区，提交后仍需 Linux 同版本验证。真实手机、局域网、远程认证、真实设备与完整属性尚待对应任务，手机宽度测试不等于手机联网验收。
+代码验收基线：1ba367de2b695b1dfd0b8d70e1cd542ad7a8c7ec。2026-10-18，Linux 独立副本配置构建与 CTest 5/5、服务测试 11/11 通过，源码前后干净；实际 HTTP CLI 的两客户端、9 份新帧和正常/过期/恢复通过，SIGINT 退出后监听与模拟子进程均清理。Windows 原验收的 7 个源码指纹与该提交一致。后续验收记录更新只涉及 README 文档。真实手机、局域网、Linux 浏览器、远程认证、真实设备与完整属性尚待对应任务，手机宽度测试不等于手机联网验收。
