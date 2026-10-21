@@ -5,6 +5,7 @@ import functools
 import json
 import math
 import os
+import re
 from pathlib import Path
 import subprocess
 import threading
@@ -16,7 +17,8 @@ import uuid
 ROOT = Path(__file__).resolve().parents[1]
 QUALITIES = {"Unknown", "Valid", "Stale", "Fault", "Unsupported"}
 MAX_LINE = 65536
-API_VERSION = 2
+API_VERSION = 3
+UINT64_MAX = 18446744073709551615
 ODOMETRY_FIELDS = ("x_m", "y_m", "yaw_rad", "linear_x_mps", "linear_y_mps", "angular_z_radps")
 
 
@@ -27,6 +29,15 @@ def finite_number(value):
         return math.isfinite(value)
     except OverflowError:
         return False
+
+
+def uint64_bytes(value):
+    if type(value) is not str or re.fullmatch(r"(?:0|[1-9][0-9]{0,19})", value) is None:
+        raise ValueError("resource bytes must be canonical unsigned decimal strings")
+    number = int(value)
+    if number > UINT64_MAX:
+        raise ValueError("resource bytes exceed uint64")
+    return number
 
 
 def validate_frame(frame):
@@ -53,6 +64,29 @@ def validate_frame(frame):
     elif (not isinstance(reading, dict)
           or any(not finite_number(reading.get(name)) for name in ODOMETRY_FIELDS)):
         raise ValueError("odometry must contain six finite numbers")
+    resources = frame.get("system_resources")
+    if (not isinstance(resources, dict) or type(resources.get("quality")) is not str
+            or resources["quality"] not in QUALITIES or "reading" not in resources):
+        raise ValueError("invalid resource fields; rebuild the mock producer")
+    reading = resources["reading"]
+    if reading is None:
+        if resources["quality"] in ("Valid", "Stale"):
+            raise ValueError("usable resource quality requires a reading")
+        return
+    if not isinstance(reading, dict):
+        raise ValueError("resource reading must be a complete object")
+    cpu = reading.get("cpu_usage_percent")
+    if not finite_number(cpu) or not 0 <= cpu <= 100:
+        raise ValueError("resource CPU must be finite and within 0..100")
+    used = uint64_bytes(reading.get("memory_used_bytes"))
+    total = uint64_bytes(reading.get("memory_total_bytes"))
+    if total == 0 or used > total:
+        raise ValueError("invalid resource memory usage")
+    if "cpu_temperature_c" not in reading:
+        raise ValueError("resource temperature must be present or null")
+    temperature = reading["cpu_temperature_c"]
+    if temperature is not None and not finite_number(temperature):
+        raise ValueError("invalid resource temperature")
 
 
 class StateBuffer:

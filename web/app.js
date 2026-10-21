@@ -15,7 +15,10 @@ const view = Object.fromEntries([
     "toggle", "restart", "reload", "status", "playback-badge", "raw-state",
     "chart-line", "chart-cursor", "chart-dot", "chart-empty", "axis-max", "axis-mid",
     "time-start", "time-end", "chart-description", "odometry-panel", "odom-quality",
-    "odom-detail", "odom-x", "odom-y", "odom-yaw", "odom-vx", "odom-vy", "odom-wz", "odom-yaw-raw"
+    "odom-detail", "odom-x", "odom-y", "odom-yaw", "odom-vx", "odom-vy", "odom-wz", "odom-yaw-raw",
+    "resources-panel", "resources-quality", "resources-detail", "cpu-usage", "cpu-meter",
+    "memory-used", "memory-unit", "memory-detail", "memory-meter", "cpu-temperature",
+    "temperature-unit", "temperature-detail"
 ].map(id => [id, document.getElementById(id)]));
 
 const liveMode = new URLSearchParams(location.search).get("mode") === "live";
@@ -61,6 +64,80 @@ function renderOdometry(odometry = null) {
         "模拟读数有效 · 位姿与速度来自同一份样本";
 }
 
+
+const maxUint64 = 18446744073709551615n;
+
+function uint64Bytes(value) {
+    if (typeof value !== "string" || !/^(0|[1-9][0-9]{0,19})$/.test(value)) return null;
+    const number = BigInt(value);
+    return number <= maxUint64 ? number : null;
+}
+
+function validResources(resources) {
+    if (!resources || !Object.keys(qualityInfo).includes(resources.quality) ||
+        !Object.prototype.hasOwnProperty.call(resources, "reading")) return false;
+    const reading = resources.reading;
+    if (reading === null) return !["Valid", "Stale"].includes(resources.quality);
+    if (typeof reading !== "object" || Array.isArray(reading) ||
+        typeof reading.cpu_usage_percent !== "number" || !Number.isFinite(reading.cpu_usage_percent) ||
+        reading.cpu_usage_percent < 0 || reading.cpu_usage_percent > 100 ||
+        !Object.prototype.hasOwnProperty.call(reading, "cpu_temperature_c") ||
+        !(reading.cpu_temperature_c === null ||
+          (typeof reading.cpu_temperature_c === "number" && Number.isFinite(reading.cpu_temperature_c)))) return false;
+    const used = uint64Bytes(reading.memory_used_bytes);
+    const total = uint64Bytes(reading.memory_total_bytes);
+    return used !== null && total !== null && total > 0n && used <= total;
+}
+
+function memoryDisplay(used, total) {
+    const units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB"];
+    let divisor = 1n;
+    let unit = 0;
+    while (unit < units.length - 1 && total >= divisor * 1024n) {
+        divisor *= 1024n;
+        ++unit;
+    }
+    const fixed = bytes => {
+        const scaled = (bytes * 100n + divisor / 2n) / divisor;
+        return String(scaled / 100n) + "." + String(scaled % 100n).padStart(2, "0");
+    };
+    return { used: fixed(used), total: fixed(total), unit: units[unit],
+        percent: Number((used * 1000n + total / 2n) / total) / 10 };
+}
+
+function renderResources(resources = null) {
+    const quality = resources ? resources.quality : "Unknown";
+    const reading = resources ? resources.reading : null;
+    view["resources-panel"].dataset.quality = quality;
+    view["resources-quality"].dataset.quality = quality;
+    view["resources-quality"].textContent = qualityInfo[quality][0] + " · " + quality;
+    view["cpu-usage"].textContent = reading === null ? "—" : reading.cpu_usage_percent.toFixed(1);
+    view["cpu-meter"].style.width = reading === null ? "0%" : reading.cpu_usage_percent + "%";
+    if (reading === null) {
+        view["memory-used"].textContent = "—";
+        view["memory-unit"].textContent = "GiB";
+        view["memory-detail"].textContent = "总量 — · 已用 —";
+        view["memory-meter"].style.width = "0%";
+    } else {
+        const memory = memoryDisplay(uint64Bytes(reading.memory_used_bytes), uint64Bytes(reading.memory_total_bytes));
+        view["memory-used"].textContent = memory.used;
+        view["memory-unit"].textContent = memory.unit;
+        view["memory-detail"].textContent = "总量 " + memory.total + " " + memory.unit + " · 已用 " + memory.percent.toFixed(1) + "%";
+        view["memory-meter"].style.width = memory.percent + "%";
+    }
+    const temperature = reading === null ? null : reading.cpu_temperature_c;
+    view["cpu-temperature"].textContent = reading === null ? "—" :
+        temperature === null ? "未提供" : temperature.toFixed(1);
+    view["temperature-unit"].hidden = reading !== null && temperature === null;
+    view["temperature-detail"].textContent = reading === null ? "尚未收到资源样本" :
+        temperature === null ? "样本未提供温度" : "温度读数 · 摄氏度";
+    view["resources-detail"].textContent = quality === "Stale" ? "历史读数 · 已过期，等待新样本" :
+        quality === "Fault" ? "资源状态故障 · 保留样本仅供诊断" :
+        quality === "Unsupported" ? "当前设备不支持资源监测" :
+        quality === "Unknown" ? (reading === null ? "尚未收到资源读数" : "质量未知 · 保留样本仅供诊断") :
+        temperature === null ? "模拟读数有效 · 样本未提供温度" : "模拟读数有效 · CPU、内存与温度来自同一份样本";
+}
+
 function parseRecord(text) {
     const lines = text.split(/\r?\n/).filter(line => line.trim() !== "");
     if (lines.length === 0) throw new Error("记录文件为空");
@@ -79,6 +156,7 @@ function parseRecord(text) {
             throw new Error(`第 ${index + 1} 行不符合模拟状态格式或时间顺序`);
         }
         if (!validOdometry(frame.odometry)) throw new Error(`第 ${index + 1} 行里程计格式不兼容，请重新构建模拟程序并生成记录`);
+        if (!validResources(frame.system_resources)) throw new Error(`第 ${index + 1} 行资源状态格式不兼容，请重新构建模拟程序并生成记录`);
         previousTime = frame.sim_time_ms;
         return frame;
     });
@@ -120,6 +198,7 @@ function renderFrame() {
     const frame = player.frames[player.index];
     const battery = frame.battery;
     renderOdometry(frame.odometry);
+    renderResources(frame.system_resources);
     view.connected.textContent = frame.connected ? "已连接" : "未连接";
     view["connection-dot"].dataset.connected = String(frame.connected);
     view["connection-detail"].textContent = frame.connected ? "模拟链路已建立" : "当前模拟场景未连接";
@@ -182,6 +261,7 @@ function play(fromStart = false) {
 
 function clearFrame() {
     renderOdometry();
+    renderResources();
     for (const id of ["connected", "voltage", "motion", "sim-time"]) view[id].textContent = "—";
     view["connection-dot"].dataset.connected = "false";
     view["connection-detail"].textContent = "等待记录";

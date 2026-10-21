@@ -20,6 +20,7 @@ add_library(
     cpp/src/battery_state.cpp
     cpp/src/data_freshness.cpp
     cpp/src/odometry_state.cpp
+    cpp/src/system_resources.cpp
 )
 
 # 设置公共头文件(.hpp)的位置, 给编译器看
@@ -69,7 +70,7 @@ target_compile_options(mock_robot_state PRIVATE ${RS_WARNING_OPTIONS})
 enable_testing()
 
 # 创建测试程序, 
-foreach(test_name IN ITEMS robot_state data_freshness battery_state odometry_state)
+foreach(test_name IN ITEMS robot_state data_freshness battery_state odometry_state system_resources)
     add_executable( # 创建程序. 目标程序命名和源码位置
         test_${test_name}
         cpp/tests/test_${test_name}.cpp

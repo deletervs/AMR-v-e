@@ -31,11 +31,12 @@ if (liveMode) {
         view["connection-detail"].textContent = "当前状态不可用";
         view["quality-detail"].textContent = "上游不可用 · 不显示旧帧为有效";
         view["odom-detail"].textContent = "当前状态不可用 · 等待新数据";
+        view["resources-detail"].textContent = "当前状态不可用 · 等待新数据";
     }
 
     function validateEnvelope(value) {
         const stream = value && value.stream;
-        if (!value || value.api_version !== 2 || !stream || typeof stream.id !== "string" ||
+        if (!value || value.api_version !== 3 || !stream || typeof stream.id !== "string" ||
             !Number.isSafeInteger(stream.sequence) || stream.sequence < 0 ||
             !["starting", "live", "stale", "stopped", "error"].includes(stream.status) ||
             !(stream.age_ms === null || (Number.isSafeInteger(stream.age_ms) && stream.age_ms >= 0))) {

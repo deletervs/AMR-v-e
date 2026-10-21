@@ -5,7 +5,7 @@
 #include <stdexcept>
 
 /*
-本文件实现 odometry_state.hpp 的核心规则.
+本文件实现 odometry_state.hpp 的核心规则
 */
 
 namespace amr

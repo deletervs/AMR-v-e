@@ -1,5 +1,6 @@
 #pragma once // 同一个.cpp编译时，本文件多次引用时只处理一次
 #include <chrono>
+#include <cstdint>
 #include <optional> //标准库，>= C++17；提供“可能有值”的类型模板
 
 /*
@@ -8,6 +9,7 @@
 2. 电池状态
 3. 机器人状态 (major)
 4. 里程计
+5. 硬件状态 (cpu, 内存, 温度)
 
 */
 namespace amr
@@ -28,7 +30,7 @@ namespace amr
         std::optional<std::chrono::steady_clock::time_point> received_at{std::nullopt}; //是否接受到电压读数
     };
 
-        struct OdometryReading
+    struct OdometryReading
     {
         double x_m{0.0};
         double y_m{0.0};
@@ -45,12 +47,28 @@ namespace amr
         std::optional<std::chrono::steady_clock::time_point> received_at{std::nullopt};
     };
 
+    struct SystemResourcesReading
+    {
+        double cpu_usage_percent{0.0};
+        std::uint64_t memory_used_bytes{0};
+        std::uint64_t memory_total_bytes{0};
+        std::optional<double> cpu_temperature_c{std::nullopt};
+    };
+
+    struct SystemResourcesState
+    {
+        std::optional<SystemResourcesReading> reading{std::nullopt};
+        DataQuality quality{DataQuality::Unknown};
+        std::optional<std::chrono::steady_clock::time_point> received_at{std::nullopt};
+    };
+
     struct RobotState
     {
-        bool connected{false}; //初始化一般用{}
+        bool connected{false};
         bool motion_enabled{false};
         BatteryState battery{};
         OdometryState odometry{};
+        SystemResourcesState system_resource{};
     };
 
 } // namespace amr
