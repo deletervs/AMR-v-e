@@ -65,6 +65,32 @@
             <p class="panel-note">位置与朝向相对局部 odom 原点，速度以车体坐标表示。正 yaw 从上方看为逆时针。全部为模拟数据。</p>
         </section>
 
+
+        <section class="panel resources-panel" id="resources-panel" data-quality="Unknown" aria-labelledby="resources-title">
+            <div class="panel-heading"><div><p class="eyebrow">SYSTEM RESOURCES</p><h2 id="resources-title">系统资源</h2></div><span class="badge" id="resources-quality" data-quality="Unknown">未知 · Unknown</span></div>
+            <div class="resources-grid">
+                <div class="resource-metric">
+                    <h3>CPU 使用率</h3>
+                    <div class="resource-value"><span id="cpu-usage">—</span><small>%</small></div>
+                    <div class="resource-meter" aria-hidden="true"><span id="cpu-meter"></span></div>
+                    <p>整机使用率 · 0–100%</p>
+                </div>
+                <div class="resource-metric">
+                    <h3>已用内存</h3>
+                    <div class="resource-value"><span id="memory-used">—</span><small id="memory-unit">GiB</small></div>
+                    <div class="resource-meter" aria-hidden="true"><span id="memory-meter"></span></div>
+                    <p id="memory-detail">总量 — · 已用 —</p>
+                </div>
+                <div class="resource-metric">
+                    <h3>CPU 温度</h3>
+                    <div class="resource-value"><span id="cpu-temperature">—</span><small id="temperature-unit">°C</small></div>
+                    <p id="temperature-detail">尚未收到资源样本</p>
+                </div>
+            </div>
+            <p class="resources-status" id="resources-detail" role="status">尚未收到资源读数</p>
+            <p class="panel-note">资源数据均为模拟值。质量描述整份样本；样本有效时，温度仍可未提供。</p>
+        </section>
+
         <div class="detail-grid">
             <section class="panel chart-panel" aria-labelledby="chart-title">
                 <div class="panel-heading"><div><p class="eyebrow">BATTERY TELEMETRY</p><h2 id="chart-title">电压变化</h2></div><span class="chart-legend"><span></span> 模拟电压 / V</span></div>

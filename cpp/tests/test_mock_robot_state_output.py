@@ -86,4 +86,27 @@ for name, value in zip(fields, (1.0, -0.5, math.pi / 4, 0.25, 0.0, 0.2)):
     check(math.isclose(recovered[name], value, rel_tol=1e-12, abs_tol=1e-12),
           "Recovered odometry has incorrect " + name)
 
+for record, (_, quality, _) in zip(records, expected):
+    resources = record["system_resources"]
+    check(resources["quality"] == quality, "Unexpected resources quality")
+    reading = resources["reading"]
+    if quality == "Unknown":
+        check(reading is None, "Startup resources must be null")
+    else:
+        check(type(reading["cpu_usage_percent"]) in (int, float)
+              and math.isfinite(reading["cpu_usage_percent"])
+              and 0 <= reading["cpu_usage_percent"] <= 100, "Invalid CPU percentage")
+        check(reading["memory_total_bytes"] == "8589934592", "Memory total must preserve decimal bytes")
+        check(type(reading["memory_used_bytes"]) is str, "Memory bytes must be decimal strings")
+check(records[1]["system_resources"]["reading"] ==
+      {"cpu_usage_percent": 0, "memory_used_bytes": "0",
+       "memory_total_bytes": "8589934592", "cpu_temperature_c": None},
+      "Valid zero readings and absent temperature must stay distinct from no sample")
+check(records[2]["system_resources"]["reading"] == records[1]["system_resources"]["reading"],
+      "Stale resources must preserve the entire sample")
+check(records[3]["system_resources"]["reading"] ==
+      {"cpu_usage_percent": 37.5, "memory_used_bytes": "2147483648",
+       "memory_total_bytes": "8589934592", "cpu_temperature_c": 52.5},
+      "Resources recovery must publish all fields")
+
 print("mock output test passed")

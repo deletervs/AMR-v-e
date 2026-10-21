@@ -189,3 +189,30 @@ h2 { font-size: 15px; font-weight: 550; margin: 0; }
     .odometry-grid { grid-template-columns: minmax(0, 1fr); }
     .odometry-panel .panel-heading { align-items: flex-start; flex-wrap: wrap; }
 }
+
+/* 系统资源独立保留质量；内存单位按容量显示。 */
+.resources-panel { margin-bottom: 22px; padding: 25px 24px; }
+.resources-panel .panel-heading { margin-bottom: 22px; }
+.resources-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 22px; }
+.resource-metric { min-width: 0; }
+.resource-metric h3 { margin: 0; font-size: 11px; font-weight: 400; color: #a1abbd; }
+.resource-value { display: flex; align-items: baseline; flex-wrap: wrap; gap: 7px; margin: 14px 0; color: #d4def0; font-size: clamp(23px, 2.3vw, 31px); font-variant-numeric: tabular-nums; }
+.resource-value > span { min-width: 0; overflow-wrap: anywhere; }
+.resource-value small { font-size: 11px; color: #7c899f; font-weight: 400; }
+.resource-metric p { margin: 10px 0 0; font-size: 10px; line-height: 1.7; color: #7c899f; overflow-wrap: anywhere; }
+.resource-meter { height: 4px; border-radius: 3px; background: #293141; overflow: hidden; }
+.resource-meter > span { display: block; width: 0; height: 100%; background: linear-gradient(90deg, #91a8ff, #7fd4b0); border-radius: inherit; }
+.resources-status { margin: 20px 0 0; color: #9caac1; font-size: 11px; line-height: 1.7; }
+.resources-panel[data-quality="Stale"] .resource-value,
+.resources-panel[data-quality="Stale"] .resources-status { color: var(--amber); }
+.resources-panel[data-quality="Stale"] .resource-meter > span { background: var(--amber); }
+.resources-panel[data-quality="Fault"] .resource-value { color: #ee9c9c; }
+.resources-panel[data-quality="Fault"] .resource-meter > span { background: #ee9c9c; }
+@media (max-width: 700px) {
+    .resources-panel { padding: 22px 18px; }
+    .resources-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px 16px; }
+    .resource-metric:last-child { grid-column: 1 / -1; padding-top: 18px; border-top: 1px solid var(--border); }
+}
+@media (max-width: 360px) {
+    .resources-panel .panel-heading { align-items: flex-start; flex-wrap: wrap; }
+}

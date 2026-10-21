@@ -98,6 +98,47 @@ check(records[6]["battery"]["quality"] == "Stale"
       and records[6]["odometry"]["quality"] == "Valid",
       "Battery and odometry must have independent recovery times")
 
+expected_resources = [
+    "Unknown", "Unknown", "Valid", "Valid", "Stale", "Stale", "Stale",
+    "Valid", "Valid", "Valid", "Valid", "Valid",
+    "Unknown", "Unknown", "Valid", "Valid", "Stale",
+]
+last_resources = None
+for record, quality in zip(records, expected_resources):
+    resources = record["system_resources"]
+    check(resources["quality"] == quality, "Unexpected resources quality")
+    reading = resources["reading"]
+    if quality == "Unknown":
+        check(reading is None, "Reset resources must have no sample")
+        last_resources = None
+        continue
+    phase = record["sim_time_ms"] % 6000
+    if phase < 3500:
+        expected_reading = {"cpu_usage_percent": 0, "memory_used_bytes": "0",
+                            "memory_total_bytes": "8589934592", "cpu_temperature_c": None}
+    elif phase < 4000:
+        expected_reading = {"cpu_usage_percent": 100, "memory_used_bytes": "8589934592",
+                            "memory_total_bytes": "8589934592", "cpu_temperature_c": 0}
+    elif phase < 4500:
+        expected_reading = {"cpu_usage_percent": 35, "memory_used_bytes": "2147483648",
+                            "memory_total_bytes": "8589934592", "cpu_temperature_c": None}
+    else:
+        expected_reading = {
+            "cpu_usage_percent": 35 + (phase - 4500) / 100,
+            "memory_used_bytes": str(2147483648 + (phase - 4500) // 500 * 134217728),
+            "memory_total_bytes": "8589934592",
+            "cpu_temperature_c": 52.5 + (phase - 4500) / 1000,
+        }
+    check(reading == expected_reading, "Unexpected resources sample")
+    if quality == "Stale":
+        check(reading == last_resources, "Stale resources must retain their sample")
+    else:
+        last_resources = reading
+check(records[6]["system_resources"]["quality"] == "Stale"
+      and records[6]["odometry"]["quality"] == "Valid", "Resource recovery must be independent")
+check(records[7]["system_resources"]["quality"] == "Valid"
+      and records[7]["battery"]["quality"] == "Stale", "Resource recovery must precede battery recovery")
+
 invalid = subprocess.run(
     [program, "--invalid-mode"],
     capture_output=True,

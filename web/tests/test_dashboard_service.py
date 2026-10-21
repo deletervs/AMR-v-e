@@ -19,9 +19,12 @@ service = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(service)
 FRAME = {"source": "mock", "sim_time_ms": 0, "connected": False, "motion_enabled": False,
          "battery": {"voltage_v": None, "quality": "Unknown"},
-         "odometry": {"reading": None, "quality": "Unknown"}}
+         "odometry": {"reading": None, "quality": "Unknown"},
+         "system_resources": {"reading": None, "quality": "Unknown"}}
 READING = {"x_m": 0.0, "y_m": 0.0, "yaw_rad": 0.0, "linear_x_mps": 0.0,
            "linear_y_mps": 0.0, "angular_z_radps": 0.0}
+RESOURCES = {"cpu_usage_percent": 35.0, "memory_used_bytes": "2147483648",
+             "memory_total_bytes": "8589934592", "cpu_temperature_c": 52.5}
 
 
 class BufferTests(unittest.TestCase):
@@ -39,6 +42,7 @@ class BufferTests(unittest.TestCase):
         frame = copy.deepcopy(FRAME)
         frame["battery"] = {"voltage_v": 22.2, "quality": "Valid"}
         frame["odometry"] = {"reading": dict(READING), "quality": "Stale"}
+        frame["system_resources"] = {"reading": dict(RESOURCES), "quality": "Valid"}
         self.buffer.publish(frame)
         self.now = 1.999
         self.assertEqual(self.buffer.snapshot()["stream"]["status"], "live")
@@ -48,6 +52,7 @@ class BufferTests(unittest.TestCase):
         self.assertEqual(snapshot["stream"]["age_ms"], 2000)
         self.assertEqual(snapshot["state"]["battery"], frame["battery"])
         self.assertEqual(snapshot["state"]["odometry"], frame["odometry"])
+        self.assertEqual(snapshot["state"]["system_resources"], frame["system_resources"])
 
     def test_sequence_copy_and_generation(self):
         self.buffer.publish(FRAME)
@@ -106,6 +111,81 @@ class BufferTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "rebuild"):
             self.buffer.publish(legacy)
 
+    def test_resource_valid_boundaries_and_exact_bytes(self):
+        readings = [
+            dict(RESOURCES, cpu_usage_percent=0, memory_used_bytes="0",
+                 memory_total_bytes=str(service.UINT64_MAX), cpu_temperature_c=None),
+            dict(RESOURCES, cpu_usage_percent=100, memory_used_bytes=str(service.UINT64_MAX),
+                 memory_total_bytes=str(service.UINT64_MAX), cpu_temperature_c=0),
+            dict(RESOURCES, memory_used_bytes=RESOURCES["memory_total_bytes"], cpu_temperature_c=-5.0),
+        ]
+        for index, reading in enumerate(readings):
+            self.buffer.publish(dict(FRAME, sim_time_ms=index,
+                                     system_resources={"reading": reading, "quality": "Valid"}))
+            snapshot = self.buffer.snapshot()
+            self.assertEqual(snapshot["state"]["system_resources"]["reading"], reading)
+            self.assertEqual(snapshot["stream"]["status"], "live")
+            snapshot["state"]["system_resources"]["reading"]["cpu_usage_percent"] = -1
+            self.assertNotEqual(self.buffer.snapshot()["state"]["system_resources"]["reading"]["cpu_usage_percent"], -1)
+
+    def test_reject_invalid_resource_fields(self):
+        invalid = [None, {}, {"quality": [], "reading": None},
+                   {"quality": "Invalid", "reading": None}, {"quality": "Valid", "reading": []},
+                   {"quality": "Valid", "reading": {}}]
+        for field, values in (
+                ("cpu_usage_percent", (-0.1, 100.1, float("nan"), float("inf"),
+                                       -float("inf"), True, "0", None, 10 ** 400)),
+                ("cpu_temperature_c", (float("nan"), float("inf"), -float("inf"), True, "0"))):
+            for value in values:
+                invalid.append({"quality": "Valid", "reading": dict(RESOURCES, **{field: value})})
+        for used, total in (("9", "8"), ("0", "0")):
+            invalid.append({"quality": "Valid", "reading": dict(RESOURCES,
+                            memory_used_bytes=used, memory_total_bytes=total)})
+        missing_temperature = dict(RESOURCES)
+        del missing_temperature["cpu_temperature_c"]
+        invalid.append({"quality": "Valid", "reading": missing_temperature})
+        for resources in invalid:
+            with self.subTest(resources=resources), self.assertRaises(ValueError):
+                self.buffer.publish(dict(FRAME, system_resources=resources))
+        self.assertEqual(self.buffer.snapshot()["stream"]["sequence"], 0)
+
+    def test_reject_noncanonical_resource_bytes(self):
+        invalid = (0, 1.0, True, None, "", "-1", "+1", "01", "1.0", "1e3",
+                   " 1", "1 ", "\u0661", str(service.UINT64_MAX + 1), "9" * 100)
+        for field in ("memory_used_bytes", "memory_total_bytes"):
+            for value in invalid:
+                with self.subTest(field=field, value=value), self.assertRaises(ValueError):
+                    self.buffer.publish(dict(FRAME, system_resources={
+                        "reading": dict(RESOURCES, **{field: value}), "quality": "Valid"}))
+        self.assertEqual(self.buffer.snapshot()["stream"]["sequence"], 0)
+
+    def test_resource_quality_requires_sample(self):
+        for quality in ("Valid", "Stale"):
+            with self.subTest(quality=quality), self.assertRaises(ValueError):
+                self.buffer.publish(dict(FRAME, system_resources={"reading": None, "quality": quality}))
+        for index, quality in enumerate(("Unknown", "Fault", "Unsupported")):
+            self.buffer.publish(dict(FRAME, sim_time_ms=index,
+                                     system_resources={"reading": None, "quality": quality}))
+            self.assertIsNone(self.buffer.snapshot()["state"]["system_resources"]["reading"])
+
+    def test_legacy_resources_require_rebuilt_producer(self):
+        legacy = copy.deepcopy(FRAME)
+        del legacy["system_resources"]
+        with self.assertRaisesRegex(ValueError, "rebuild"):
+            self.buffer.publish(legacy)
+
+    def test_unsupported_resources_are_not_transport_loss(self):
+        frame = copy.deepcopy(FRAME)
+        frame["battery"] = {"voltage_v": 22.2, "quality": "Valid"}
+        frame["odometry"] = {"reading": dict(READING), "quality": "Valid"}
+        frame["system_resources"] = {"reading": None, "quality": "Unsupported"}
+        self.buffer.publish(frame)
+        snapshot = self.buffer.snapshot()
+        self.assertEqual(snapshot["stream"]["status"], "live")
+        self.assertEqual(snapshot["state"]["battery"], frame["battery"])
+        self.assertEqual(snapshot["state"]["odometry"], frame["odometry"])
+        self.assertEqual(snapshot["state"]["system_resources"], frame["system_resources"])
+
     def test_nonincreasing_time_rejected(self):
         self.buffer.publish(FRAME)
         with self.assertRaises(ValueError):
@@ -142,7 +222,7 @@ class HttpTests(unittest.TestCase):
             with urllib.request.urlopen(self.base + "api/state", timeout=2) as response:
                 self.assertEqual(response.headers["Cache-Control"], "no-store")
                 snapshot = json.load(response)
-                self.assertEqual(snapshot["api_version"], 2)
+                self.assertEqual(snapshot["api_version"], 3)
                 self.assertEqual(snapshot["stream"]["sequence"], 1)
                 self.assertEqual(snapshot["state"]["odometry"], FRAME["odometry"])
         for asset in ("", "app.js", "live.js", "styles.css", "state.ndjson"):
@@ -197,6 +277,9 @@ class ProducerTests(unittest.TestCase):
         producer = service.MockProducer([str(MOCK_EXECUTABLE), "--stream"], buffer, env)
         observed = []
         odometry_observed = []
+        resources_observed = []
+        resource_independent = False
+        saw_absent_temperature = saw_zero_temperature = saw_positive_temperature = saw_full_memory = False
         independent_recovery = False
         last_sequence = 0
         try:
@@ -212,14 +295,32 @@ class ProducerTests(unittest.TestCase):
                     if not odometry_observed or odometry_observed[-1] != odometry["quality"]:
                         odometry_observed.append(odometry["quality"])
                     independent_recovery |= quality == "Stale" and odometry["quality"] == "Valid"
+                    resources = snapshot["state"]["system_resources"]
+                    if not resources_observed or resources_observed[-1] != resources["quality"]:
+                        resources_observed.append(resources["quality"])
+                    resource_independent |= quality == "Stale" and resources["quality"] == "Valid"
+                    reading = resources["reading"]
+                    if reading is not None and resources["quality"] == "Valid":
+                        temperature = reading["cpu_temperature_c"]
+                        saw_absent_temperature |= temperature is None
+                        saw_zero_temperature |= temperature == 0
+                        saw_positive_temperature |= temperature is not None and temperature > 0
+                        saw_full_memory |= reading["memory_used_bytes"] == reading["memory_total_bytes"]
                     if (observed == ["Unknown", "Valid", "Stale", "Valid"]
                             and odometry_observed == ["Unknown", "Valid", "Stale", "Valid"]
-                            and independent_recovery):
+                            and independent_recovery
+                            and resources_observed == ["Unknown", "Valid", "Stale", "Valid"]
+                            and resource_independent and saw_absent_temperature and saw_zero_temperature
+                            and saw_positive_temperature and saw_full_memory):
                         break
                 time.sleep(0.02)
             self.assertEqual(observed, ["Unknown", "Valid", "Stale", "Valid"])
             self.assertEqual(odometry_observed, ["Unknown", "Valid", "Stale", "Valid"])
             self.assertTrue(independent_recovery)
+            self.assertEqual(resources_observed, ["Unknown", "Valid", "Stale", "Valid"])
+            self.assertTrue(resource_independent)
+            self.assertTrue(saw_absent_temperature and saw_zero_temperature and saw_positive_temperature)
+            self.assertTrue(saw_full_memory)
         finally:
             producer.close()
 
