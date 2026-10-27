@@ -35,4 +35,17 @@ namespace amr
         InvalidMessage
     };
 
+    class EventLog
+    {
+    public:
+        static constexpr std::size_t max_entries{100};
+
+        LogAppendResult append(const LogEntry &entry);
+        const std::deque<LogEntry> &entries() const;
+        bool truncated() const;
+
+    private:
+        std::deque<LogEntry> entries_{};
+        bool truncated_{false};
+    };
 } // namespace amr
