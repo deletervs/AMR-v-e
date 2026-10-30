@@ -14,6 +14,19 @@ export function scaledAxis(value) {
   if (!Number.isFinite(value) || Math.abs(value) > 1) throw new Error('invalid axis');
   return Math.abs(value) <= 0.15 ? 0 : Math.sign(value) * (Math.abs(value) - 0.15) / 0.85;
 }
+// Fetches may finish out of order. Retire old responses after a later response
+// has been applied, and retire every outstanding response on connection loss.
+export class ResponseOrder {
+  constructor() { this.epoch = 0; this.issued = 0; this.applied = 0; }
+  begin() { return { epoch: this.epoch, sequence: ++this.issued }; }
+  current(ticket) { return ticket.epoch === this.epoch && ticket.sequence > this.applied; }
+  accept(ticket) {
+    if (!this.current(ticket)) return false;
+    this.applied = ticket.sequence;
+    return true;
+  }
+  reset() { this.epoch++; this.issued = 0; this.applied = 0; }
+}
 export class InputSession {
   constructor(id, clock = () => performance.now()) {
     this.id = id;

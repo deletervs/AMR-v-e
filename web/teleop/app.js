@@ -1,20 +1,30 @@
-import { InputSession, KEY_CODES, randomController, readPad } from './core.mjs';
+import { InputSession, KEY_CODES, randomController, readPad, ResponseOrder } from './core.mjs';
 const $ = id => document.getElementById(id);
 const input = new InputSession(randomController(crypto));
+const responses = new ResponseOrder();
 let csrf = '', online = false, inflight = false, actionBusy = false, suspended = false;
+let nextConnectAt = 0;
 let padIndex = null, animationTime = 0, heading = 0, offset = 0;
 const pointers = new Map();
 const reasons = { none: '无', startup: '初始零速', released: '已释放', release: '已释放', software_stop: '软件停止', stopped: '软件停止', stop_latched: '软件停止锁存', command_expired: '命令已过期', lease_expired: '租约已到期', deadman_released: '使能已松开', waiting_neutral: '等待回中', neutral_required: '等待回中', agent_unavailable: '假控制器不可用', link_unavailable: '链路不可用', link_lost: '链路断开', not_armed: '未取得控制权' };
 Object.assign(reasons, { Disarmed: '未取得控制权', WaitingForNeutral: '等待回中', DeadmanReleased: '使能已松开', None: '无', CommandExpired: '命令已过期', LeaseExpired: '租约已到期', SoftwareStop: '软件停止', LinkUnavailable: '链路不可用', InvalidCommand: '非法命令', ClockRegression: '时钟回退', InvalidConfig: '配置无效' });
 const current = () => !document.hidden && document.hasFocus() && !suspended;
 async function request(body = null, keepalive = false) {
-  const response = await fetch(body ? '/api/command' : '/api/state', { method: body ? 'POST' : 'GET', cache: 'no-store',
-    headers: body ? { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf } : {},
-    body: body ? JSON.stringify(body) : undefined, keepalive, signal: keepalive ? undefined : AbortSignal.timeout(900) });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  const result = await response.json();
-  if (result.offline !== true || !result.transport_available) throw new Error('假控制器不可用');
-  return result.state;
+  const ticket = responses.begin();
+  try {
+    const response = await fetch(body ? '/api/command' : '/api/state', { method: body ? 'POST' : 'GET', cache: 'no-store',
+      headers: body ? { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf } : {},
+      body: body ? JSON.stringify(body) : undefined, keepalive, signal: keepalive ? undefined : AbortSignal.timeout(900) });
+    if (!responses.current(ticket)) return null;
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const result = await response.json();
+    if (!responses.current(ticket)) return null;
+    if (result.offline !== true || !result.transport_available) throw new Error('假控制器不可用');
+    return responses.accept(ticket) ? result.state : null;
+  } catch (error) {
+    if (!responses.current(ticket)) return null;
+    throw error;
+  }
 }
 function notice(text) { $('notice').textContent = text; }
 function speed(id, value, unit) {
@@ -30,15 +40,33 @@ function releaseLocal(message, keepalive = false) {
   clearLocal();
   notice(message);
   render();
-  if (release && csrf) request(release, keepalive).then(state => { input.observe(state); render(); }).catch(() => {});
+  if (release && csrf) request(release, keepalive).then(state => { if (state) { input.observe(state); render(); } }).catch(() => {});
 }
 function fail(error) {
   online = false;
+  responses.reset();
   releaseLocal('请求失败，已清空输入。恢复连接后请重新取得控制权。');
-  $('transport').textContent = '· 本机连接中断';
-  $('status').textContent = '连接中断 · 本地显示零速';
-  speed('linear', '0.00', 'm/s');
-  speed('angular', '0.00', 'rad/s');
+  // A restarted service has a new CSRF token. Reconnect only to observe it;
+  // acquiring control remains an explicit user action after every failure.
+  csrf = '';
+  nextConnectAt = performance.now() + 500;
+}
+async function connect() {
+  const ticket = responses.begin();
+  try {
+    const response = await fetch('/api/session', { cache: 'no-store', signal: AbortSignal.timeout(900) });
+    if (!responses.current(ticket)) return;
+    if (!response.ok) throw new Error('连接失败');
+    const session = await response.json();
+    if (!responses.current(ticket)) return;
+    if (typeof session.csrf !== 'string' || session.csrf.length < 32 || session.offline !== true || !session.transport_available) throw new Error('假控制器不可用');
+    input.observe(session.state);
+    responses.accept(ticket);
+    csrf = session.csrf;
+    online = true;
+  } catch (error) {
+    if (responses.current(ticket)) throw error;
+  }
 }
 function updatePad() {
   const pads = navigator.getGamepads?.() ?? [];
@@ -55,7 +83,19 @@ function updatePad() {
 }
 function render() {
   const state = input.state;
-  if (!state) return;
+  const stale = state && performance.now() - input.seenAt > 150;
+  if (!online || !state || stale) {
+    for (const id of ['arm', 'release', 'clear']) $(id).disabled = true;
+    $('arm').textContent = '取得控制权';
+    speed('linear', '0.00', 'm/s'); speed('angular', '0.00', 'rad/s');
+    $('owner').textContent = '无有效控制权';
+    $('reason').textContent = online && stale ? '本机状态已过期' : '本机连接不可用';
+    $('lease').textContent = '—'; $('ttl').textContent = '—';
+    $('status').textContent = '状态不可用 · 本地显示零速';
+    $('transport').textContent = online && stale ? '· 等待本机新状态' : '· 正在重新连接本机服务';
+    $('status-dot').className = 'status-dot stopped';
+    return;
+  }
   const owned = input.owns();
   const canArm = online && current() && !state.armed && !state.stop_latched && input.neutral();
   $('arm').disabled = !canArm || actionBusy;
@@ -75,15 +115,27 @@ function render() {
   document.querySelectorAll('[data-input]').forEach(el => el.classList.toggle('pressed', input.virtual.has(el.dataset.input)));
 }
 async function pump() {
-  if (inflight || actionBusy || !csrf) return;
-  updatePad();
+  // These checks must run even while a fetch is outstanding. The C++ command
+  // deadline remains authoritative; the page must not animate old motion.
   if (input.active && !current()) releaseLocal('页面已离开，输入已清空。返回后请重新取得控制权。');
   if (input.active && performance.now() - input.seenAt > 150) releaseLocal('状态已过时，已释放控制权。请重新取得。');
+  if (inflight || actionBusy) return;
+  if (!csrf) {
+    if (performance.now() < nextConnectAt) return;
+    inflight = true;
+    try { await connect(); }
+    catch (error) { fail(error); }
+    finally { inflight = false; render(); }
+    return;
+  }
+  updatePad();
   inflight = true;
   try {
     const packet = current() ? input.packet() : null;
     const wasActive = input.active;
-    input.observe(await request(packet));
+    const state = await request(packet);
+    if (!state) return;
+    input.observe(state);
     online = true;
     if (wasActive && !input.active) { clearLocal(); notice('控制权已结束。松开所有输入后重新取得控制权。'); }
   } catch (error) { fail(error); }
@@ -100,9 +152,10 @@ $('arm').addEventListener('click', async () => {
     while (inflight) await new Promise(resolve => setTimeout(resolve, 5));
     if (generation !== input.generation || !current() || !input.neutral() || input.state?.armed) return;
     const state = await request({ action: 'arm', controller_id: input.id, source: input.source });
+    if (!state) return;
     if (!current() || !input.activate(state, generation)) {
       const release = input.release(state);
-      if (release) input.observe(await request(release));
+      if (release) { const released = await request(release); if (released) input.observe(released); }
       notice('控制权未取得。先回中，再手动重试。');
     } else notice('请先保持回中。确认后按住使能与方向；松开使能即归零。');
   } catch (error) { fail(error); }
@@ -111,13 +164,13 @@ $('arm').addEventListener('click', async () => {
 $('release').addEventListener('click', () => releaseLocal('已主动释放。松开所有输入后可再次取得控制权。'));
 async function softwareStop() {
   releaseLocal('软件停止已请求。解除后仍需重新取得控制权。');
-  try { input.observe(await request({ action: 'stop' })); online = true; render(); }
+  try { const state = await request({ action: 'stop' }); if (state) { input.observe(state); online = true; render(); } }
   catch (error) { fail(error); }
 }
 $('stop').addEventListener('click', softwareStop);
 $('clear').addEventListener('click', async () => {
   releaseLocal('正在解除停止；不会自动取得控制权。');
-  try { input.observe(await request({ action: 'clear' })); notice('停止已解除。松开所有输入，手动取得控制权。'); render(); }
+  try { const state = await request({ action: 'clear' }); if (state) { input.observe(state); notice('停止已解除。松开所有输入，手动取得控制权。'); render(); } }
   catch (error) { fail(error); }
 });
 function switchSource(source) {
@@ -176,20 +229,13 @@ window.addEventListener('gamepaddisconnected', event => {
 });
 function animate(time) {
   const dt = Math.min((time - animationTime) / 1000, 0.05); animationTime = time;
-  if (online && input.state) { heading -= input.state.angular_radps * dt * 80; offset += input.state.linear_mps * dt * 45; }
+  if (online && input.state && performance.now() - input.seenAt <= 150) { heading -= input.state.angular_radps * dt * 80; offset += input.state.linear_mps * dt * 45; }
   offset = Math.max(-45, Math.min(45, offset));
   $('robot').style.transform = `translateY(${-offset}px) rotate(${heading}deg)`;
   requestAnimationFrame(animate);
 }
 async function start() {
-  try {
-    const response = await fetch('/api/session', { cache: 'no-store', signal: AbortSignal.timeout(900) });
-    if (!response.ok) throw new Error('连接失败');
-    const session = await response.json();
-    csrf = session.csrf;
-    if (!csrf || session.offline !== true || !session.transport_available) throw new Error('假控制器不可用');
-    input.observe(session.state); online = true; render();
-  } catch (error) { fail(error); }
+  await pump();
   setInterval(pump, 50);
   requestAnimationFrame(animate);
 }
