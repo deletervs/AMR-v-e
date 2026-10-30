@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>RS · 离线遥控实验台</title><link rel="stylesheet" href="/styles.css"><script type="module" src="/app.js"></script></head>
+<body>
+<header><a class="brand" href="/" aria-label="RS 离线实验台">RS<span>ROBOT SYSTEM</span></a><span class="offline"><i></i> OFFLINE · 本机模拟</span></header>
+<main>
+  <section class="intro"><div><p class="eyebrow">M3 / CONTROL LAB</p><h1>离线遥控实验台</h1><p>先回中，再取得控制权。按住使能，体验假控制器的输入与停止。</p></div><div class="scope">无实机连接<br><small>不接 ROS · 不发送机器人指令</small></div></section>
+  <div class="workspace">
+    <section class="visual panel" aria-label="假机器人状态">
+      <div class="panel-head"><h2>假机器人</h2><span class="tag">示意动画</span></div>
+      <div class="stage" id="stage"><div class="grid"></div><div class="axis axis-n">前方 ↑</div><div class="robot" id="robot"><div class="robot-top"><span>RS</span><i></i></div><div class="wheel l"></div><div class="wheel r"></div></div><div class="stage-label">仅根据目标速度绘制 · 非物理或避障仿真</div></div>
+      <div class="speeds"><div><span>目标线速度</span><strong id="linear">0.00 <small>m/s</small></strong></div><div><span>目标角速度</span><strong id="angular">0.00 <small>rad/s</small></strong></div></div>
+      <div class="status-line"><span class="status-dot" id="status-dot"></span><strong id="status" role="status" aria-live="polite">连接本机假控制器…</strong></div>
+      <dl class="details"><div><dt>当前控制来源</dt><dd id="owner">无</dd></div><div><dt>停止原因</dt><dd id="reason">等待状态</dd></div><div><dt>租约剩余</dt><dd id="lease">0.0 s</dd></div><div><dt>命令有效期</dt><dd id="ttl">0 ms</dd></div></dl>
+      <p class="clock">本机运行 <span id="elapsed">0.0</span> s <span id="transport">· 等待连接</span></p>
+    </section>
+    <section class="controls panel" aria-label="输入控制">
+      <div class="panel-head"><h2>输入控制</h2><span class="tag">单一控制权</span></div>
+      <div class="tabs" role="group" aria-label="选择输入来源"><button id="keyboard-tab" class="selected" aria-pressed="true">键盘 / 虚拟按键</button><button id="gamepad-tab" aria-pressed="false">标准手柄</button></div>
+      <div id="keyboard-panel"><p class="hint">方向：<kbd>W A S D</kbd> / 方向键<br>使能：按住 <kbd>Shift</kbd> 或下方使能键</p><div class="dpad" role="group" aria-label="虚拟方向按键"><button class="up" data-input="forward" aria-label="前进">↑<small>W</small></button><button class="left" data-input="left" aria-label="左转">←<small>A</small></button><div class="center">回中</div><button class="right" data-input="right" aria-label="右转">→<small>D</small></button><button class="down" data-input="backward" aria-label="后退">↓<small>S</small></button></div><button id="enable" class="enable" data-input="enable">按住使能 <span>松开即归零</span></button></div>
+      <div id="gamepad-panel" hidden><div class="pad-symbol">⊕</div><p id="pad-status" class="hint">连接标准手柄，并按任意键让浏览器识别。</p><p class="hint">左摇杆前后 / 左右 · 按住 <kbd>RB</kbd> 使能<br>回中死区 15% · 未知映射不能使能</p><p class="small-note">真实 USB / 蓝牙手柄尚未验收。</p></div>
+      <button id="arm" class="primary" disabled>取得控制权</button><button id="release" class="secondary" disabled>释放控制权</button>
+      <p id="notice" class="notice" role="status">松开所有方向与使能，再点击取得控制权。</p>
+      <div class="stop-box"><button id="stop" class="stop">■ 软件停止 <kbd>Space</kbd></button><div><span>停止会锁存；解除后需重新取得控制权。</span><button id="clear" class="text-button" disabled>解除停止</button></div></div>
+    </section>
+  </div>
+  <section class="instructions"><div><b>01</b><span>松开方向与使能<br><small>手柄先将摇杆回中</small></span></div><div><b>02</b><span>取得本窗口控制权<br><small>租约最多 10 秒</small></span></div><div><b>03</b><span>按住使能 + 方向<br><small>切后台或失焦即释放</small></span></div></section>
+  <footer>OFFLINE ONLY · 限速 0.25 m/s / 0.60 rad/s · 命令有效期 250 ms<br><span>软件停止不等于硬件急停。真实手柄、手机实触摸、真实运动与避障均待独立验收。</span></footer>
+</main>
+</body></html>

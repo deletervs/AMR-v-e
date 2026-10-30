@@ -1,0 +1,32 @@
+--- a/src/hf_hw.cpp
++++ b/src/hf_hw.cpp
+@@ -163,11 +163,13 @@
+         {
+             if (robolink_->byteAnalysisCall(data[i]))
+             {
+-                // one package ack arrived
+-                ack_ready_ = true;
+-                time_out_cnt_ = 0;
++                // An unrelated ACK must not complete this request.
++                ack_ready_ = robolink_->getReceiveRenewFlag(command) != 0;
++                if (ack_ready_) time_out_cnt_ = 0;
+             }
+         }
++        // Keep the next chunk queued; a complete matching reply already won.
++        if (ack_ready_) break;
+         data = port_->readBuffer();
+         if (cicle_timer_.expires_from_now().is_negative())
+         {
+--- a/src/hf_hw_ros.cpp
++++ b/src/hf_hw_ros.cpp
+@@ -544,6 +544,10 @@
+         if (hf_hw_.updateCommand(GET_SYSTEM_INFO, count))
+         {
+             std::cout<< "spend time is  "<< (ros::Time::now() - currentTime).toSec()<<std::endl;
++            // Copy the newly decoded reply before publishing it.
++            readBufferUpdate();
++            // Host ROS time after valid reply; NOT the MCU acquisition time.
++            robot_state.header.stamp = ros::Time::now();
+             robot_state_publisher_.publish(robot_state);
+             //robot_time_publisher_.publish(robot_time);
+         }

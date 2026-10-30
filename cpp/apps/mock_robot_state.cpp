@@ -1,4 +1,5 @@
 #include "amr/battery_state.hpp"
+#include "amr/event_log.hpp"
 #include "amr/odometry_state.hpp"
 #include "amr/robot_state.hpp"
 #include "amr/system_resources.hpp"
@@ -8,6 +9,7 @@
 #include <cstdint>
 #include <iomanip>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -49,9 +51,100 @@ namespace //匿名命名空间, 内部函数只供本文件使用
         throw std::logic_error("Unhandled DataQuality");
     }
 
+    const char *level_name(amr::LogLevel level)
+    {
+        switch (level)
+        {
+        case amr::LogLevel::Info: return "Info";
+        case amr::LogLevel::Warning: return "Warning";
+        case amr::LogLevel::Error: return "Error";
+        }
+        throw std::logic_error("Unhandled LogLevel");
+    }
+
+    void print_json_string(const std::string &text)
+    {
+        constexpr char hex[] = "0123456789abcdef";
+        std::cout << '"';
+        for (const unsigned char byte : text)
+        {
+            switch (byte)
+            {
+            case '"': std::cout << "\\\""; break;
+            case '\\': std::cout << "\\\\"; break;
+            case '\b': std::cout << "\\b"; break;
+            case '\f': std::cout << "\\f"; break;
+            case '\n': std::cout << "\\n"; break;
+            case '\r': std::cout << "\\r"; break;
+            case '\t': std::cout << "\\t"; break;
+            default:
+                if (byte < 0x20)
+                {
+                    std::cout << "\\u00" << hex[byte >> 4] << hex[byte & 15];
+                }
+                else
+                {
+                    std::cout << static_cast<char>(byte);
+                }
+            }
+        }
+        std::cout << '"';
+    }
+
+    class EventRecorder
+    {
+    public:
+        void observe(const amr::RobotState &state, std::chrono::milliseconds elapsed)
+        {
+            if (!previous_.has_value())
+            {
+                append(elapsed, amr::LogLevel::Info, "mock", u8"模拟状态发布启动");
+            }
+            else
+            {
+                if (state.connected != previous_->connected)
+                {
+                    append(elapsed, state.connected ? amr::LogLevel::Info : amr::LogLevel::Warning,
+                           "connection", state.connected ? u8"模拟连接已建立" : u8"模拟连接已断开");
+                }
+                quality_change(elapsed, "battery", previous_->battery.quality, state.battery.quality);
+                quality_change(elapsed, "odometry", previous_->odometry.quality, state.odometry.quality);
+                quality_change(elapsed, "system_resources", previous_->system_resource.quality,
+                               state.system_resource.quality);
+            }
+            previous_ = state;
+        }
+
+        const amr::EventLog &history() const { return history_; }
+
+    private:
+        void append(std::chrono::milliseconds elapsed, amr::LogLevel level,
+                    const std::string &source, const std::string &message)
+        {
+            if (history_.append({elapsed.count(), level, source, message}) != amr::LogAppendResult::Append)
+            {
+                throw std::logic_error("Internally generated event was rejected");
+            }
+        }
+
+        void quality_change(std::chrono::milliseconds elapsed, const std::string &source,
+                            amr::DataQuality before, amr::DataQuality after)
+        {
+            if (before == after) return;
+            const auto level = after == amr::DataQuality::Fault ? amr::LogLevel::Error :
+                               after == amr::DataQuality::Valid ? amr::LogLevel::Info :
+                               amr::LogLevel::Warning;
+            append(elapsed, level, source, std::string{quality_name(before)} + " -> " + quality_name(after));
+        }
+
+        amr::EventLog history_{};
+        std::optional<amr::RobotState> previous_{};
+    };
+
     void print_state_json( //该函数要生成 json, 所以 cout 遵循 json 规则
         const amr::RobotState &state,
-        std::chrono::milliseconds simulated_time)
+        std::chrono::milliseconds simulated_time,
+        const amr::EventLog &events)
     {
         std::cout << std::boolalpha << std::setprecision(15)
                   << "{\"source\":\"mock\",\"sim_time_ms\":"
@@ -109,7 +202,21 @@ namespace //匿名命名空间, 内部函数只供本文件使用
             std::cout << "null";
         }
         std::cout << ",\"quality\":\"" << quality_name(state.system_resource.quality)
-                  << "\"}}\n";
+                  << "\"},\"event_log\":{\"entries\":[";
+        bool first = true;
+        for (const auto &entry : events.entries())
+        {
+            if (!first) std::cout << ',';
+            first = false;
+            std::cout << "{\"elapsed_ms\":" << entry.elapsed << ",\"level\":";
+            print_json_string(level_name(entry.level));
+            std::cout << ",\"source\":";
+            print_json_string(entry.source);
+            std::cout << ",\"message\":";
+            print_json_string(entry.message);
+            std::cout << '}';
+        }
+        std::cout << "],\"truncated\":" << events.truncated() << "}}\n";
     }
 
     amr::RobotState make_stream_state(std::chrono::milliseconds elapsed)
@@ -196,6 +303,7 @@ namespace //匿名命名空间, 内部函数只供本文件使用
         const auto started_at = Clock::now();
         const Ms period{500};
         int frame{0};
+        EventRecorder recorder{};
 
         while (!fast || frame < 17)
         {
@@ -204,7 +312,8 @@ namespace //匿名命名空间, 内部函数只供本文件使用
                                      : std::chrono::duration_cast<Ms>(Clock::now() - started_at);
 
             const auto state = make_stream_state(elapsed);
-            print_state_json(state, elapsed);
+            recorder.observe(state, elapsed);
+            print_state_json(state, elapsed, recorder.history());
             std::cout.flush();
 
             if (!std::cout)
@@ -224,6 +333,25 @@ namespace //匿名命名空间, 内部函数只供本文件使用
 
         return 0;
     }
+    int run_event_log_fixture()
+    {
+        amr::EventLog events{};
+        std::string source = u8"mock\"\\\n来源";
+        source.push_back('\0');
+        std::string message(400, '\0');
+        message += u8"中文\"\\\n\t\r\b\f";
+        for (char byte = 1; byte < 32; ++byte) message.push_back(byte);
+        for (std::int64_t index = 0; index < 101; ++index)
+        {
+            const amr::LogEntry entry{index,
+                index % 3 == 0 ? amr::LogLevel::Info :
+                index % 3 == 1 ? amr::LogLevel::Warning : amr::LogLevel::Error,
+                source, message + std::to_string(index)};
+            if (events.append(entry) != amr::LogAppendResult::Append) return 1;
+        }
+        print_state_json(amr::RobotState{}, std::chrono::milliseconds{100}, events);
+        return std::cout ? 0 : 1;
+    }
 } // namespace
 
 int run_scenario()
@@ -234,9 +362,11 @@ int run_scenario()
     amr::RobotState state{};
     const Milliseconds timeout{1000};
     const Clock::time_point start{};
+    EventRecorder recorder{};
 
     // 启动, 尚未收到读数
-    print_state_json(state, Milliseconds{0});
+    recorder.observe(state, Milliseconds{0});
+    print_state_json(state, Milliseconds{0}, recorder.history());
 
     // 100ms链接成功, 并收到读数
     state.connected = true;
@@ -247,7 +377,8 @@ int run_scenario()
     amr::update_system_resources_reading(
         state.system_resource, amr::SystemResourcesReading{0.0, 0, 8 * gibibyte, std::nullopt},
         start + Milliseconds{100});
-    print_state_json(state, Milliseconds{100});
+    recorder.observe(state, Milliseconds{100});
+    print_state_json(state, Milliseconds{100}, recorder.history());
 
     // 到 1100 ms 时，读数年龄恰好达到超时阈值
     amr::refresh_battery_quality(
@@ -256,7 +387,8 @@ int run_scenario()
         state.odometry, start + Milliseconds{1100}, timeout);
     amr::refresh_system_resources_quality(
         state.system_resource, start + Milliseconds{1100}, timeout);
-    print_state_json(state, Milliseconds{1100});
+    recorder.observe(state, Milliseconds{1100});
+    print_state_json(state, Milliseconds{1100}, recorder.history());
 
     // 在 1200 ms 收到新读数，恢复有效状态
     state.connected = true;
@@ -268,7 +400,8 @@ int run_scenario()
     amr::update_system_resources_reading(
         state.system_resource, amr::SystemResourcesReading{37.5, 2 * gibibyte, 8 * gibibyte, 52.5},
         start + Milliseconds{1200});
-    print_state_json(state, Milliseconds{1200});
+    recorder.observe(state, Milliseconds{1200});
+    print_state_json(state, Milliseconds{1200}, recorder.history());
 
     return 0;
 }
@@ -293,8 +426,13 @@ int main(int argc, char *argv[])
         {
             return run_stream(true);
         }
+
+        if (mode == "--event-log-test")
+        {
+            return run_event_log_fixture();
+        }
     }
 
-    std::cerr << "Usage: mock_robot_state [--stream|--stream-test]\n";
+    std::cerr << "Usage: mock_robot_state [--stream|--stream-test|--event-log-test]\n";
     return 2;
 }
