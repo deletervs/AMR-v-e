@@ -30,7 +30,7 @@
                 <li><span>M7</span> 整体验收</li>
             </ol>
         </div>
-        <div class="sidebar-footer"><span class="small-dot"></span> 本地开发环境<br><small>M1-005C / 模拟状态仪表盘</small></div>
+        <div class="sidebar-footer"><span class="small-dot"></span> 本地开发环境<br><small id="stage-label">M1-005C / 模拟状态仪表盘</small></div>
     </aside>
 
     <main id="dashboard">
@@ -40,15 +40,15 @@
             <button id="reload" class="button button-secondary" type="button">重新加载记录 <span aria-hidden="true">↻</span></button>
         </header>
 
-        <div class="notice"><span class="notice-icon" aria-hidden="true">i</span><p id="notice-copy"><strong>你正在查看模拟记录。</strong> 数据由 C++ 程序生成，当前页面用于离线回放；连接、运动状态均为模拟值。</p><span class="notice-source">source: mock</span></div>
+        <div class="notice"><span class="notice-icon" aria-hidden="true">i</span><p id="notice-copy"><strong>你正在查看模拟记录。</strong> 数据由 C++ 程序生成，当前页面用于离线回放；连接、运动状态均为模拟值。</p><span id="source-label" class="notice-source">source: mock</span></div>
 
         <nav class="mode-switch" aria-label="数据模式"><a href="./" id="replay-link">离线回放</a><a href="./?mode=live" id="live-link">持续模拟</a></nav>
 
         <section class="metric-grid" aria-label="机器人状态">
-            <article class="metric-card"><div class="metric-label">模拟连接 <span aria-hidden="true">↗</span></div><div class="metric-value" id="connected">—</div><div class="metric-foot"><span class="indicator" id="connection-dot"></span><span id="connection-detail">等待记录</span></div></article>
-            <article class="metric-card"><div class="metric-label">电池电压 <span>VOLTAGE</span></div><div class="metric-value"><span id="voltage">—</span><span class="unit">V</span></div><div class="metric-foot" id="voltage-detail">没有读数时保持未知</div></article>
+            <article class="metric-card"><div class="metric-label" id="connection-label">模拟连接 <span aria-hidden="true">↗</span></div><div class="metric-value" id="connected">—</div><div class="metric-foot"><span class="indicator" id="connection-dot"></span><span id="connection-detail">等待记录</span></div></article>
+            <article class="metric-card"><div class="metric-label">电池电压 <span>VOLTAGE</span></div><div class="metric-value"><span id="voltage">—</span><span class="unit">V</span></div><div class="metric-foot" id="voltage-detail">没有读数时保持未知</div><p id="battery-sample-detail" hidden></p></article>
             <article class="metric-card"><div class="metric-label">电池数据质量 <span aria-hidden="true">◎</span></div><div class="metric-value quality-value" id="quality" data-quality="Unknown">未知</div><div class="metric-foot" id="quality-detail">Unknown · 尚无数据</div></article>
-            <article class="metric-card"><div class="metric-label">运动使能 <span aria-hidden="true">◇</span></div><div class="metric-value" id="motion">—</div><div class="metric-foot"><span class="indicator"></span><span>本阶段保持禁用</span></div></article>
+            <article class="metric-card"><div class="metric-label" id="motion-label">运动使能 <span aria-hidden="true">◇</span></div><div class="metric-value" id="motion">—</div><div class="metric-foot"><span class="indicator"></span><span id="motion-detail">本阶段保持禁用</span></div></article>
         </section>
 
         <section class="panel odometry-panel" id="odometry-panel" data-quality="Unknown" aria-labelledby="odometry-title">
@@ -62,7 +62,7 @@
                 <div class="odometry-metric"><h3>转向角速度 <span>车体 Z</span></h3><div class="odometry-value"><span id="odom-wz">—</span><small>rad/s</small></div></div>
             </div>
             <p class="odometry-status" id="odom-detail" role="status">尚未收到里程计读数</p>
-            <p class="panel-note">位置与朝向相对局部 odom 原点，速度以车体坐标表示。正 yaw 从上方看为逆时针。全部为模拟数据。</p>
+            <p class="panel-note" id="odometry-note">位置与朝向相对局部 odom 原点，速度以车体坐标表示。正 yaw 从上方看为逆时针。全部为模拟数据。</p>
         </section>
 
 
@@ -88,12 +88,12 @@
                 </div>
             </div>
             <p class="resources-status" id="resources-detail" role="status">尚未收到资源读数</p>
-            <p class="panel-note">资源数据均为模拟值。质量描述整份样本；样本有效时，温度仍可未提供。</p>
+            <p class="panel-note" id="resources-note">资源数据均为模拟值。质量描述整份样本；样本有效时，温度仍可未提供。</p>
         </section>
 
         <div class="detail-grid">
             <section class="panel chart-panel" aria-labelledby="chart-title">
-                <div class="panel-heading"><div><p class="eyebrow">BATTERY TELEMETRY</p><h2 id="chart-title">电压变化</h2></div><span class="chart-legend"><span></span> 模拟电压 / V</span></div>
+                <div class="panel-heading"><div><p class="eyebrow">BATTERY TELEMETRY</p><h2 id="chart-title">电压变化</h2></div><span class="chart-legend" id="chart-legend"><span></span> 模拟电压 / V</span></div>
                 <div class="chart-wrap">
                     <div class="chart-axis" aria-hidden="true"><span id="axis-max">25</span><span id="axis-mid">12.5</span><span>0</span></div>
                     <svg id="voltage-chart" viewBox="0 0 640 180" role="img" aria-labelledby="chart-title chart-description">
@@ -120,6 +120,17 @@
                 <div class="record-meta"><span>数据文件</span><code>state.ndjson</code></div><div class="record-meta"><span>数据来源</span><code>C++ / --stream-test</code></div>
             </section>
         </div>
+
+        <section class="panel events-panel" id="events-panel" data-mode="empty" aria-labelledby="events-title">
+            <div class="panel-heading"><div><p class="eyebrow">EVENT HISTORY</p><h2 id="events-title">事件日志</h2></div><span class="badge" id="events-badge">等待记录</span></div>
+            <p class="events-note" id="events-note" role="status">尚未收到事件历史。</p>
+            <p class="events-truncated" id="events-truncated" hidden>较早事件已移除，当前只保留最近 100 条。</p>
+            <div class="events-scroll" tabindex="0" aria-label="最近事件，可滚动查看">
+                <ol class="events-list" id="events-list"></ol>
+                <p class="events-empty" id="events-empty">当前还没有事件记录。</p>
+            </div>
+            <p class="panel-note" id="events-time-note">时间从模拟程序启动开始计算。日志保存在内存中，程序重启后清空。</p>
+        </section>
 
         <details class="panel raw-panel">
             <summary><span>当前帧原始数据 <span class="raw-label">JSON</span></span><span class="summary-hint">展开查看 <span aria-hidden="true">⌄</span></span></summary>

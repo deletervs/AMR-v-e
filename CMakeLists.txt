@@ -21,6 +21,11 @@ add_library(
     cpp/src/data_freshness.cpp
     cpp/src/odometry_state.cpp
     cpp/src/system_resources.cpp
+    cpp/src/event_log.cpp
+    cpp/src/linux_resources.cpp
+    cpp/src/battery_source.cpp
+    cpp/src/motion_guard.cpp
+    cpp/src/input_mapping.cpp
 )
 
 # 设置公共头文件(.hpp)的位置, 给编译器看
@@ -70,7 +75,7 @@ target_compile_options(mock_robot_state PRIVATE ${RS_WARNING_OPTIONS})
 enable_testing()
 
 # 创建测试程序, 
-foreach(test_name IN ITEMS robot_state data_freshness battery_state odometry_state system_resources)
+foreach(test_name IN ITEMS robot_state data_freshness battery_state odometry_state system_resources event_log linux_resources battery_source motion_guard input_mapping)
     add_executable( # 创建程序. 目标程序命名和源码位置
         test_${test_name}
         cpp/tests/test_${test_name}.cpp
@@ -101,6 +106,13 @@ add_test(
 )
 
 
+add_test(
+    NAME test_mock_robot_events
+    COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/cpp/tests/test_mock_robot_events.py"
+        "$<TARGET_FILE:mock_robot_state>"
+)
+
 #[[
 Note: 
 1. STATIC 表示静态库: 先把添加到库里的.cpp源文件编译成目标文件, 再打包供程序链接
@@ -110,3 +122,37 @@ Note:
     INTERFACE           0               1
 3. 
 ]]
+# Linux 真机只读采集；Windows 仍构建解析器与原来的模拟程序。
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(robot_state_agent cpp/apps/robot_state_agent.cpp)
+    target_link_libraries(robot_state_agent PRIVATE amr_state Threads::Threads)
+    target_compile_options(robot_state_agent PRIVATE ${RS_WARNING_OPTIONS})
+    option(RS_WITH_ROS_BATTERY "Enable read-only ROS1 battery subscription" OFF)
+    if(RS_WITH_ROS_BATTERY)
+        find_package(catkin REQUIRED COMPONENTS roscpp handsfree_msgs)
+        target_compile_definitions(robot_state_agent PRIVATE AMR_WITH_ROS_BATTERY)
+        target_include_directories(robot_state_agent PRIVATE ${catkin_INCLUDE_DIRS})
+        target_link_libraries(robot_state_agent PRIVATE ${catkin_LIBRARIES})
+    # SSH does not source ROS setup. DT_RPATH also resolves transitive ROS libraries.
+    set_property(TARGET robot_state_agent APPEND_STRING PROPERTY LINK_FLAGS " -Wl,--disable-new-dtags")
+    set_property(TARGET robot_state_agent PROPERTY BUILD_RPATH "${catkin_LIBRARY_DIRS}")
+    endif()
+endif()
+
+# Exercise the portable producer output on PC without ROS or a powered robot.
+add_test(
+    NAME test_robot_battery_output
+    COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/cpp/tests/test_robot_battery_output.py"
+        "${CMAKE_CXX_COMPILER}" "$<TARGET_FILE:amr_state>"
+        --configuration "$<CONFIG>"
+        --output "${CMAKE_BINARY_DIR}/robot_battery_output.ndjson"
+)
+
+# Local simulation only: this executable has no robot transport.
+add_executable(mock_teleop cpp/apps/mock_teleop.cpp)
+target_link_libraries(mock_teleop PRIVATE amr_state)
+target_compile_options(mock_teleop PRIVATE ${RS_WARNING_OPTIONS})
+add_test(NAME test_mock_teleop_protocol
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/cpp/tests/test_mock_teleop_protocol.py"
+        "$<TARGET_FILE:mock_teleop>")
