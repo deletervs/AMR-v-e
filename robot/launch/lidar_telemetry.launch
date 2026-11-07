@@ -1,0 +1,47 @@
+<?xml version="1.0"?>
+<!-- All args precede their uses. Raw scan only; host UART speed is not a persistent sensor setting. -->
+<launch>
+    <arg name="base_telemetry_launch" />
+    <arg name="robolink_config_file" />
+    <arg name="lidar_port" default="/dev/lidar_front" />
+    <arg name="lidar_baud_rate" default="1000000" doc="Host UART baud confirmed on this robot; not a device RPM or persistent setting" />
+    <include file="$(arg base_telemetry_launch)">
+        <arg name="robolink_config_file" value="$(arg robolink_config_file)" />
+    </include>
+    <node name="rs_readonly_lidar" pkg="bluesea2" type="bluesea2_node" output="screen" respawn="false" required="true">
+    #ROS#
+    <param name="scan_topic" value="/scan" />
+        <param name="cloud_topic" value="cloud" />
+        <param name="frame_id" value="laser" />
+     #DATA#
+    <param name="min_dist" value="0.01" />
+        <param name="max_dist" value="50.0" />
+        <param name="output_scan" value="true" />
+        <param name="output_cloud" value="false" />
+        <param name="output_cloud2" value="false" />
+        <param name="output_360" value="true" />
+        <param name="reversed" value="true" />
+        <param name="hard_resample" value="false" />
+        <param name="soft_resample" value="false" />
+        <param name="with_angle_filter" value="false" />
+        <param name="min_angle" value="-3.1415926" />
+        <param name="max_angle" value="3.1415926" />
+    #CONNECT#
+    <param name="type" value="uart" />
+        <param name="port" value="$(arg lidar_port)" />
+        <param name="baud_rate" value="$(arg lidar_baud_rate)" type="int" />
+    #GET#
+    <param name="uuid" value="-1" />
+    #SET#
+    <param name="rpm" value="-1" />
+        <param name="resample_res" value="-1" />
+        <param name="unit_is_mm" value="-1" />
+        <param name="with_smooth" value="-1" />
+        <param name="with_deshadow" value="-1" />
+        <param name="with_confidence" value="-1" />
+        <param name="direction" value="-1" />#-1 0 1
+    #CUSTOM#
+    <param name="error_circle" value="3" />
+        <param name="error_scale" value="0.9" />
+    </node>
+</launch>

@@ -7,8 +7,11 @@
     <title>RS · 机器人状态总览</title>
     <link rel="icon" href="data:,">
     <link rel="stylesheet" href="./styles.css">
+    <script src="./lidar.js" defer></script>
     <script src="./app.js" defer></script>
     <script src="./live.js" defer></script>
+    <script src="./camera.js" defer></script>
+    <script src="./execution-banner.js" defer></script>
 </head>
 <body>
     <aside class="sidebar" aria-label="项目导航">
@@ -56,12 +59,13 @@
             <div class="odometry-grid">
                 <div class="odometry-metric"><h3>X 位置 <span>odom</span></h3><div class="odometry-value"><span id="odom-x">—</span><small>m</small></div></div>
                 <div class="odometry-metric"><h3>Y 位置 <span>odom</span></h3><div class="odometry-value"><span id="odom-y">—</span><small>m</small></div></div>
-                <div class="odometry-metric"><h3>朝向 yaw</h3><div class="odometry-value"><span id="odom-yaw">—</span><small>°</small></div><p id="odom-yaw-raw">原始 yaw：— rad</p></div>
-                <div class="odometry-metric"><h3>前向速度 <span>车体 X</span></h3><div class="odometry-value"><span id="odom-vx">—</span><small>m/s</small></div></div>
-                <div class="odometry-metric"><h3>左向速度 <span>车体 Y</span></h3><div class="odometry-value"><span id="odom-vy">—</span><small>m/s</small></div></div>
-                <div class="odometry-metric"><h3>转向角速度 <span>车体 Z</span></h3><div class="odometry-value"><span id="odom-wz">—</span><small>rad/s</small></div></div>
+                <div class="odometry-metric"><h3>朝向 yaw <span>odom</span></h3><div class="odometry-value"><span id="odom-yaw">—</span><small>°</small></div><p id="odom-yaw-raw">原始 yaw：— rad</p></div>
+                <div class="odometry-metric"><h3>前向速度 <span>base_link X</span></h3><div class="odometry-value"><span id="odom-vx">—</span><small>m/s</small></div></div>
+                <div class="odometry-metric"><h3>左向速度 <span>base_link Y</span></h3><div class="odometry-value"><span id="odom-vy">—</span><small>m/s</small></div></div>
+                <div class="odometry-metric"><h3>转向角速度 <span>base_link Z</span></h3><div class="odometry-value"><span id="odom-wz">—</span><small>rad/s</small></div></div>
             </div>
             <p class="odometry-status" id="odom-detail" role="status">尚未收到里程计读数</p>
+            <p class="sample-detail" id="odom-sample-detail" hidden></p>
             <p class="panel-note" id="odometry-note">位置与朝向相对局部 odom 原点，速度以车体坐标表示。正 yaw 从上方看为逆时针。全部为模拟数据。</p>
         </section>
 
@@ -89,6 +93,23 @@
             </div>
             <p class="resources-status" id="resources-detail" role="status">尚未收到资源读数</p>
             <p class="panel-note" id="resources-note">资源数据均为模拟值。质量描述整份样本；样本有效时，温度仍可未提供。</p>
+        </section>
+
+        <section class="panel lidar-panel" id="lidar-panel" data-quality="Unknown" aria-labelledby="lidar-title">
+            <div class="panel-heading"><div><p class="eyebrow">LOCAL LIDAR SCAN</p><h2 id="lidar-title">局部雷达扫描</h2></div><span class="badge" id="lidar-quality" data-quality="Unknown">未知 · Unknown</span></div>
+            <div class="lidar-toolbar"><label for="lidar-range">显示半径 <select id="lidar-range"><option value="2">2 m</option><option value="5" selected>5 m</option><option value="10">10 m</option><option value="20">20 m</option></select></label><span id="lidar-count">— / — 有效点 / 总射线</span></div>
+            <div class="lidar-plot"><canvas id="lidar-canvas" role="img" aria-label="传感器局部平面扫描，X 向上，Y 向左" aria-describedby="lidar-detail lidar-sample-detail lidar-note"></canvas><p id="lidar-empty" class="lidar-empty">雷达未接入</p></div>
+            <p id="lidar-detail" class="lidar-status" role="status">雷达未接入</p>
+            <p id="lidar-sample-detail" class="sample-detail" hidden></p>
+            <p id="lidar-note" class="panel-note">传感器局部坐标：X 向上、Y 向左。只画有效距离点；null 表示未知，不连接或填充。此图是局部扫描，未做坐标变换，不是地图、障碍判断或避障控制。显示范围只改变绘图。</p>
+        </section>
+
+        <section class="panel camera-panel" id="camera-panel" data-status="disabled" aria-labelledby="camera-title">
+            <div class="panel-heading"><div><p class="eyebrow">READ-ONLY CAMERA</p><h2 id="camera-title">相机画面</h2></div><span class="badge" id="camera-status">未启用</span></div>
+            <div class="camera-view"><img id="camera-image" alt="Dabai DC1 当前只读图像" width="320" height="240" hidden></div>
+            <p id="camera-detail" class="panel-note" role="status">相机默认关闭；仅显式启用的机器人只读会话可接收真实图像。模拟回放不提供相机。</p>
+            <p id="camera-metadata" class="sample-detail" hidden></p>
+            <p class="panel-note">本机接收时效超过 1500 ms、断流或解码失败会撤图。主机 read 后时间不是曝光时间；初帧传输延迟和光学重复帧无法证明，未提供深度、标定或坐标变换。</p>
         </section>
 
         <div class="detail-grid">

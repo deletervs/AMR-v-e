@@ -12,6 +12,9 @@ find_package(Threads REQUIRED)
 add_library(amr_telemetry STATIC
     ${RS_ROOT}/cpp/src/battery_state.cpp
     ${RS_ROOT}/cpp/src/battery_source.cpp
+    ${RS_ROOT}/cpp/src/odometry_source.cpp
+    ${RS_ROOT}/cpp/src/lidar_source.cpp
+    ${RS_ROOT}/cpp/src/odometry_state.cpp
     ${RS_ROOT}/cpp/src/data_freshness.cpp
     ${RS_ROOT}/cpp/src/system_resources.cpp
     ${RS_ROOT}/cpp/src/event_log.cpp
@@ -22,17 +25,35 @@ add_executable(robot_state_agent ${RS_ROOT}/cpp/apps/robot_state_agent.cpp)
 target_link_libraries(robot_state_agent PRIVATE amr_telemetry Threads::Threads)
 target_compile_options(robot_state_agent PRIVATE -Wall -Wextra -Wpedantic)
 option(RS_WITH_ROS_BATTERY "Read-only ROS1 battery subscription" OFF)
-if(RS_WITH_ROS_BATTERY)
-    find_package(catkin REQUIRED COMPONENTS roscpp handsfree_msgs)
-    target_compile_definitions(robot_state_agent PRIVATE AMR_WITH_ROS_BATTERY)
+option(RS_WITH_ROS_ODOMETRY "Read-only ROS1 matching pose/twist subscription" OFF)
+option(RS_WITH_ROS_LIDAR "Read-only ROS1 LaserScan subscription" OFF)
+if(RS_WITH_ROS_BATTERY OR RS_WITH_ROS_ODOMETRY OR RS_WITH_ROS_LIDAR)
+    set(RS_ROS_COMPONENTS roscpp)
+    if(RS_WITH_ROS_BATTERY)
+        list(APPEND RS_ROS_COMPONENTS handsfree_msgs)
+    endif()
+    if(RS_WITH_ROS_ODOMETRY)
+        list(APPEND RS_ROS_COMPONENTS geometry_msgs)
+    endif()
+    if(RS_WITH_ROS_LIDAR)
+        list(APPEND RS_ROS_COMPONENTS sensor_msgs)
+        target_compile_definitions(robot_state_agent PRIVATE AMR_WITH_ROS_LIDAR)
+    endif()
+    find_package(catkin REQUIRED COMPONENTS ${RS_ROS_COMPONENTS})
+    if(RS_WITH_ROS_BATTERY)
+        target_compile_definitions(robot_state_agent PRIVATE AMR_WITH_ROS_BATTERY)
+    endif()
+    if(RS_WITH_ROS_ODOMETRY)
+        target_compile_definitions(robot_state_agent PRIVATE AMR_WITH_ROS_ODOMETRY)
+    endif()
     target_include_directories(robot_state_agent PRIVATE ${catkin_INCLUDE_DIRS})
     target_link_libraries(robot_state_agent PRIVATE ${catkin_LIBRARIES})
-    # SSH does not source ROS setup. DT_RPATH also resolves transitive ROS libraries.
+    # DT_RPATH also resolves transitive ROS libraries under ordinary SSH.
     set_property(TARGET robot_state_agent APPEND_STRING PROPERTY LINK_FLAGS " -Wl,--disable-new-dtags")
     set_property(TARGET robot_state_agent PROPERTY BUILD_RPATH "${catkin_LIBRARY_DIRS}")
 endif()
 enable_testing()
-foreach(name IN ITEMS battery_state battery_source data_freshness system_resources event_log linux_resources)
+foreach(name IN ITEMS battery_state battery_source odometry_state odometry_source lidar_source data_freshness system_resources event_log linux_resources)
     add_executable(test_${name} ${RS_ROOT}/cpp/tests/test_${name}.cpp)
     target_link_libraries(test_${name} PRIVATE amr_telemetry)
     target_compile_options(test_${name} PRIVATE -Wall -Wextra -Wpedantic -UNDEBUG)

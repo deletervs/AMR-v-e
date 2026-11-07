@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>真实输入监视器</title><link rel="stylesheet" href="/style.css">
+<main>
+<h1>真实输入监视器</h1>
+<p class="notice">仅浏览器映射预览，未接 C++ 控制链、未发送到机器人。standard 映射不代表已确认实体 Xbox；虚拟设备也可能出现在列表。</p>
+<section><label>输入来源 <select id="source"><option value="gamepad">手柄</option><option value="keyboard">键盘 / 虚拟键位</option></select></label>
+<label>浏览器设备 <select id="device"><option value="">请选择设备</option></select></label>
+<button id="start">开始采集</button><button id="pause">暂停 / 清零</button>
+<p id="status" role="status">已暂停；选择设备并回中后开始</p></section>
+<section><h2>设备原始数据</h2><pre id="raw">未采集</pre></section>
+<section><h2>映射预览</h2><p>死区 0.15；示例限幅 0.25 m/s、0.6 rad/s。仅为原网页示例值，不是 M4 实机参数。RB（button 5）或 Shift 按住时预览。</p>
+<output id="preview">线速度 0.000 m/s · 角速度 0.000 rad/s</output>
+<h2>C++ 映射结果</h2><p>来源 cpp_input_preview；示例目标 0.25 m/s、0.6 rad/s，死区 0.15。未接机器人、未使能运动，不是 M4 参数。上方 JavaScript 预览与此结果独立。</p><output id="cpp">C++ 未启用或尚未采样</output>
+<p>键盘：WASD / 方向键 + Shift；Space 暂停并清零。只在本页面聚焦且采集启用时读取这些键。</p>
+<div id="virtual"><button data-key="KeyW">前 W</button><button data-key="KeyS">后 S</button><button data-key="KeyA">左 A</button><button data-key="KeyD">右 D</button><button data-key="ShiftLeft">按住 Shift</button></div></section>
+<section><h2>本机观测报告</h2><p>最多保留最近 1200 条、每秒 10 条。只记录上述控制键和设备采样，不记录文本。报告不构成物理验收。</p>
+<label><input type="checkbox" id="physical">我自行确认本轮操作来自实体手柄</label>
+<label>连接方式（用户自报） <select id="connection"><option>未确认</option><option>USB</option><option>蓝牙</option></select></label><p>浏览器不能独立证明 USB / 蓝牙连接方式。</p>
+<label>自行标记操作 <select id="mark"><option>未标记</option><option>摇杆移动与回中</option><option>RB 按下与松开</option><option>断开与重连</option><option>键盘操作</option><option>虚拟键位操作</option></select></label>
+<button id="export">导出本机 JSON</button><span id="count">0 条</span></section>
+</main><script type="module" src="/app.mjs"></script></html>

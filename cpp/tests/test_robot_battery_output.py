@@ -54,6 +54,30 @@ int main()
 }
 '''
 
+def compile_output(compiler,state_library,configuration,fixture):
+    source=(ROOT/"cpp/apps/robot_state_agent.cpp").read_text(encoding="utf-8")
+    # Only namespace functions are exercised; Linux main and ROS code are not compiled.
+    prefix=source[:source.index("int main(")].replace("#include <unistd.h>","")
+    code=prefix+'\n#include "amr/battery_source.hpp"\n'+fixture
+    compiler_name=Path(compiler).name.lower()
+    env=dict(os.environ)
+    if os.name=="nt":
+        env["PATH"]=str(Path(compiler).parent)+os.pathsep+env.get("PATH","")
+    with tempfile.TemporaryDirectory(prefix="rs-battery-output-") as temp:
+        folder=Path(temp);cpp=folder/"fixture.cpp";cpp.write_text(code,encoding="utf-8")
+        binary=folder/("fixture.exe" if os.name=="nt" else "fixture")
+        if compiler_name in ("cl","cl.exe","clang-cl","clang-cl.exe"):
+            command=[compiler,"/nologo","/std:c++17","/EHsc","/MDd" if configuration.lower()=="debug" else "/MD","/I"+str(ROOT/"cpp/include"),str(cpp),str(state_library.resolve()),"/Fe:"+str(binary)]
+        else:
+            command=[compiler,"-std=c++17","-I",str(ROOT/"cpp/include"),str(cpp),str(state_library.resolve()),"-o",str(binary)]
+        built=subprocess.run(command,cwd=folder,env=env,capture_output=True,text=True,timeout=30)
+        if built.returncode:raise RuntimeError(built.stdout+built.stderr)
+        run=subprocess.run([str(binary)],env=env,capture_output=True,text=True,timeout=5)
+        assert run.returncode==0,run.stderr
+        lines=run.stdout.splitlines();frames=[json.loads(x) for x in lines]
+    return run.stdout
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument("compiler")
@@ -61,30 +85,12 @@ def main():
     parser.add_argument("--output",type=Path)
     parser.add_argument("--configuration",default="Debug")
     args=parser.parse_args()
-    source=(ROOT/"cpp/apps/robot_state_agent.cpp").read_text(encoding="utf-8")
-    # Only namespace functions are exercised; Linux main and ROS code are not compiled.
-    prefix=source[:source.index("int main(")].replace("#include <unistd.h>","")
-    code=prefix+'\n#include "amr/battery_source.hpp"\n'+FIXTURE
-    compiler_name=Path(args.compiler).name.lower()
-    env=dict(os.environ)
-    if os.name=="nt":
-        env["PATH"]=str(Path(args.compiler).parent)+os.pathsep+env.get("PATH","")
-    with tempfile.TemporaryDirectory(prefix="rs-battery-output-") as temp:
-        folder=Path(temp);cpp=folder/"fixture.cpp";cpp.write_text(code,encoding="utf-8")
-        binary=folder/("fixture.exe" if os.name=="nt" else "fixture")
-        if compiler_name in ("cl","cl.exe","clang-cl","clang-cl.exe"):
-            command=[args.compiler,"/nologo","/std:c++17","/EHsc","/MDd" if args.configuration.lower()=="debug" else "/MD","/I"+str(ROOT/"cpp/include"),str(cpp),str(args.state_library.resolve()),"/Fe:"+str(binary)]
-        else:
-            command=[args.compiler,"-std=c++17","-I",str(ROOT/"cpp/include"),str(cpp),str(args.state_library.resolve()),"-o",str(binary)]
-        built=subprocess.run(command,cwd=folder,env=env,capture_output=True,text=True,timeout=30)
-        if built.returncode:raise RuntimeError(built.stdout+built.stderr)
-        run=subprocess.run([str(binary)],env=env,capture_output=True,text=True,timeout=5)
-        assert run.returncode==0,run.stderr
-        lines=run.stdout.splitlines();frames=[json.loads(x) for x in lines]
+    output=compile_output(args.compiler,args.state_library,args.configuration,FIXTURE)
+    frames=[json.loads(line) for line in output.splitlines()]
     assert len(frames)==13
     assert [x["elapsed_ms"] for x in frames]==[0,1,500,1000,2000,3999,4000,4500,5000,5500,6000,6500,7000]
     assert all(x["source"]=="robot" and x["motion_enabled"] is False for x in frames)
-    assert frames[0]["capabilities"]=={"battery":False}
+    assert frames[0]["capabilities"]=={"battery":False,"odometry":False,"lidar":False}
     assert all(x["battery"]["voltage_v"] is None for x in frames[:3])
     first=frames[3]["battery"]
     assert first["quality"]=="Valid" and first["received_elapsed_ms"]==1000
@@ -103,11 +109,11 @@ def main():
     buffer=service.StateBuffer(expected_source="robot")
     for frame in frames:buffer.publish(frame)
     assert buffer.snapshot()["stream"]["sequence"]==13
-    assert service.API_VERSION==6
+    assert service.API_VERSION==8
     if args.output:
         args.output.parent.mkdir(parents=True,exist_ok=True)
-        args.output.write_text(run.stdout,encoding="utf-8")
-    print("13 C++ output/quality frames validated by API6; offline replay only, no ROS execution")
+        args.output.write_text(output,encoding="utf-8")
+    print("13 C++ output/quality frames validated by API8; offline replay only, no ROS execution")
 
 if __name__=="__main__":
     main()

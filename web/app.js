@@ -15,7 +15,7 @@ const view = Object.fromEntries([
     "toggle", "restart", "reload", "status", "playback-badge", "raw-state",
     "chart-line", "chart-cursor", "chart-dot", "chart-empty", "axis-max", "axis-mid",
     "time-start", "time-end", "chart-description", "odometry-panel", "odom-quality",
-    "odom-detail", "odom-x", "odom-y", "odom-yaw", "odom-vx", "odom-vy", "odom-wz", "odom-yaw-raw",
+    "odom-detail", "odom-x", "odom-y", "odom-yaw", "odom-vx", "odom-vy", "odom-wz", "odom-yaw-raw", "odom-sample-detail",
     "resources-panel", "resources-quality", "resources-detail", "cpu-usage", "cpu-meter",
     "memory-used", "memory-unit", "memory-detail", "memory-meter", "cpu-temperature",
     "temperature-unit", "temperature-detail", "events-panel", "events-badge",
@@ -45,7 +45,7 @@ function validOdometry(odometry) {
             Number.isFinite(odometry.reading[name]));
 }
 
-function renderOdometry(odometry = null) {
+function renderOdometry(odometry = null, capable = false) {
     const quality = odometry ? odometry.quality : "Unknown";
     const reading = odometry ? odometry.reading : null;
     view["odometry-panel"].dataset.quality = quality;
@@ -64,8 +64,11 @@ function renderOdometry(odometry = null) {
     view["odom-detail"].textContent = quality === "Stale" ? "历史读数 · 已过期，等待新样本" :
         quality === "Fault" ? "故障 · 保留样本仅供诊断" :
         quality === "Unsupported" ? "当前设备不支持里程计" :
-        quality === "Unknown" ? (reading === null ? (robotMode ? "里程计未接入" : "尚未收到里程计读数") : "质量未知 · 保留样本仅供诊断") :
-        "模拟读数有效 · 位姿与速度来自同一份样本";
+        quality === "Unknown" ? (reading === null ? (robotMode ? (capable ? "等待首个有效里程计" : "里程计未接入") : "尚未收到里程计读数") : "质量未知 · 保留样本仅供诊断") :
+        robotMode ? "真实 ROS 读数有效 · 位姿与速度的源时间戳精确配对" : "模拟读数有效 · 位姿与速度来自同一份样本";
+    view["odom-sample-detail"].hidden = !robotMode || reading === null;
+    view["odom-sample-detail"].textContent = robotMode && reading !== null ?
+        `位姿坐标系 ${odometry.frame_id} → 机体 ${odometry.child_frame_id} · 本机接收 T+${odometry.received_elapsed_ms} ms · ROS 源时间 ${odometry.source_stamp_ns} ns · pose seq ${odometry.source_sequence} · twist seq ${odometry.source_twist_sequence}` : "";
 }
 
 
@@ -108,6 +111,39 @@ function nextBatterySample(previous, frame) {
         throw new Error("电池接收时间倒退或同次收包内容发生变化");
     }
     return battery;
+}
+
+const odometryMetadata = ["received_elapsed_ms", "source_stamp_ns", "source_sequence",
+    "source_twist_sequence", "frame_id", "child_frame_id"];
+
+function validRobotOdometry(frame) {
+    const odometry = frame.odometry;
+    if (!validOdometry(odometry)) return false;
+    const capabilities = frame.capabilities;
+    if (!capabilities || !Object.prototype.hasOwnProperty.call(capabilities, "odometry")) {
+        return Object.keys(odometry).length === 2 && odometry.reading === null && odometry.quality === "Unknown";
+    }
+    if (typeof capabilities.odometry !== "boolean" ||
+        !odometryMetadata.every(name => Object.prototype.hasOwnProperty.call(odometry, name))) return false;
+    if (!capabilities.odometry && (odometry.reading !== null || odometry.quality !== "Unknown")) return false;
+    if (odometry.reading === null) return odometryMetadata.every(name => odometry[name] === null);
+    const stamp = uint64Bytes(odometry.source_stamp_ns);
+    return Number.isSafeInteger(odometry.received_elapsed_ms) && odometry.received_elapsed_ms >= 0 &&
+        odometry.received_elapsed_ms <= frame.elapsed_ms && stamp !== null && stamp > 0n &&
+        [odometry.source_sequence, odometry.source_twist_sequence].every(value => Number.isInteger(value) && value >= 0 && value <= 4294967295) &&
+        odometry.frame_id === "odom" && odometry.child_frame_id === "base_link";
+}
+
+function nextOdometrySample(previous, frame) {
+    const odometry = frame.odometry;
+    if (frame.source !== "robot" || odometry.reading === null) return previous;
+    if (previous && (odometry.received_elapsed_ms < previous.received_elapsed_ms ||
+        (odometry.received_elapsed_ms === previous.received_elapsed_ms &&
+         (odometryMetadata.some(name => odometry[name] !== previous[name]) ||
+          odometryFields.some(name => odometry.reading[name] !== previous.reading[name]))))) {
+        throw new Error("里程计接收时间倒退或同次收包内容发生变化");
+    }
+    return odometry;
 }
 
 function validResources(resources) {
@@ -178,7 +214,7 @@ function renderResources(resources = null) {
 
 const eventLevels = { Info: "信息", Warning: "警告", Error: "错误" };
 const eventSources = { mock: "模拟程序", robot: "机器人采集进程", connection: "连接", battery: "电池",
-    odometry: "里程计", system_resources: "系统资源" };
+    odometry: "里程计", lidar: "雷达", system_resources: "系统资源" };
 const eventEncoder = new TextEncoder();
 let eventHistory = null;
 let eventSignature = null;
@@ -263,6 +299,8 @@ function parseRecord(text, source = "mock") {
     let previousTime = -1;
     let previousSequence = 0;
     let batterySample = null;
+    let odometrySample = null;
+    let lidarSample = null;
     return lines.map((line, index) => {
         let frame;
         try { frame = JSON.parse(line); }
@@ -281,11 +319,26 @@ function parseRecord(text, source = "mock") {
         if (source === "robot") {
             if (!Number.isSafeInteger(frame.sequence) || frame.sequence <= previousSequence ||
                 !validRobotBattery(frame) ||
-                !frame.odometry || frame.odometry.reading !== null || frame.odometry.quality !== "Unknown") {
+                !validRobotOdometry(frame) || !validRobotLidar(frame)) {
                 throw new Error(`第 ${index + 1} 行机器人序号或未接入通道不符合约定`);
             }
             previousSequence = frame.sequence;
-            batterySample = nextBatterySample(batterySample, frame);
+            const nextBattery = nextBatterySample(batterySample, frame);
+            const nextOdometry = nextOdometrySample(odometrySample, frame);
+            const nextLidar = nextLidarSample(lidarSample, frame);
+            batterySample = nextBattery;
+            odometrySample = nextOdometry;
+            lidarSample = nextLidar;
+            if (frame.telemetry && Object.prototype.hasOwnProperty.call(frame.telemetry, "lidar_topic") &&
+                ![null, "/scan"].includes(frame.telemetry.lidar_topic)) {
+                throw new Error(`第 ${index + 1} 行雷达 topic 格式不兼容`);
+            }
+            for (const name of ["odometry_pose_topic", "odometry_twist_topic"]) {
+                if (frame.telemetry && Object.prototype.hasOwnProperty.call(frame.telemetry, name) &&
+                    frame.telemetry[name] !== null && typeof frame.telemetry[name] !== "string") {
+                    throw new Error(`第 ${index + 1} 行里程计 topic 格式不兼容`);
+                }
+            }
         }
         if (!validOdometry(frame.odometry)) throw new Error(`第 ${index + 1} 行里程计格式不兼容，请重新构建模拟程序并生成记录`);
         if (!validResources(frame.system_resources)) throw new Error(`第 ${index + 1} 行资源状态格式不兼容，请重新构建模拟程序并生成记录`);
@@ -330,7 +383,8 @@ function renderChart() {
 function renderFrame() {
     const frame = player.frames[player.index];
     const battery = frame.battery;
-    renderOdometry(frame.odometry);
+    renderOdometry(frame.odometry, frame.capabilities?.odometry === true);
+    renderLidar(frame.source === "robot" ? frame.lidar : null, frame.capabilities?.lidar === true);
     renderResources(frame.system_resources);
     renderEventLog(frame.event_log);
     view.connected.textContent = robotMode ? (frame.connected ? "采集进程存活" : "采集不可用") : frame.connected ? "已连接" : "未连接";
@@ -407,6 +461,7 @@ function clearFrame({ preserveEvents = false } = {}) {
     else renderEventLog();
     renderOdometry();
     renderResources();
+    renderLidar(null, false, preserveEvents);
     for (const id of ["connected", "voltage", "motion", "sim-time"]) view[id].textContent = "—";
     view["connection-dot"].dataset.connected = "false";
     view["connection-detail"].textContent = "等待记录";

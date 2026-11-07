@@ -1,6 +1,6 @@
 # RS 只读状态仪表盘
 
-用户编写核心 C++；AI 负责接入、网页、只读 HTTP 桥接、测试与文档。默认仍为模拟程序；显式机器人来源读取 Jetson 本机 CPU/内存/可选 CPU 温度，M2-002 按能力接入真实 ROS 电压。里程计和电机状态尚未接入。网页暂作主线的简单验证入口。
+用户编写核心 C++；AI 负责接入、网页、只读 HTTP 桥接、测试与文档。默认仍为模拟程序；显式机器人来源读取 Jetson 本机 CPU/内存/可选 CPU 温度，并按订阅能力接入 ROS 电压、本地里程计与 M2-004 局部雷达扫描（雷达实机首读另验）。电机状态尚未接入。网页暂作主线的简单验证入口。
 
 ## 运行
 
@@ -72,7 +72,7 @@ C++ 决定每份样本的质量。网页只换算显示单位，不用网页时�
 
 ## 接口与字段
 
-本轮接口升级为 **api_version=6**。更新后先停止旧服务再启动；网页拒绝 API 5 及更早版本。
+本轮接口升级为 **api_version=8**。更新后先停止旧服务再启动；网页拒绝 API 7 及更早版本。
 
 GET /api/state 返回 stream 与 state。stream.status 为 starting/live/stale/stopped/error；HTTP 200 不等于上游可用。
 stream.id 标识服务会话，stream.source 为显式选择的 mock 或 robot，stream.sequence 为已接收有效帧数，age_ms 来自服务本机单调时钟。
@@ -81,9 +81,9 @@ stream.id 标识服务会话，stream.source 为显式选择的 mock 或 robot�
 
 模拟帧保留 source=mock、严格递增的 sim_time_ms、布尔 connected、motion_enabled=false、battery 和 odometry。
 机器人帧使用 source=robot、非负且严格递增的 elapsed_ms、正整数且严格递增的 sequence；不允许 sim_time_ms。机器人 sequence 是采集端序号，独立于服务接收计数。服务默认 expected_source=mock，机器人必须显式选择，不接受未知或同流混合来源。
-机器人 odometry 固定为 `{reading:null,quality:"Unknown"}`；不得用假值填充未接入通道。可附带 telemetry 元数据说明 hostname、CPU/内存/温度的真实读取路径，原样保留在原始 JSON。
+机器人未声明 odometry 能力时，odometry 必须精确为 `{reading:null,quality:"Unknown"}`；不得用假值填充未接入通道。可附带 telemetry 元数据说明 hostname、CPU/内存/温度的真实读取路径，原样保留在原始 JSON。
 
-新机器人生产者总发 `capabilities:{battery:bool}`，battery 为严格布尔值。未带 capabilities 的旧 M2-001 帧仍可用，但 battery 必须精确为 `{voltage_v:null,quality:"Unknown"}`，显示“电压未接入”。模拟帧合同与17帧回放保持原样。
+新机器人生产者总发 `capabilities:{battery:bool,odometry:bool,lidar:bool}`，三项均为严格布尔值。未带 capabilities 的旧 M2-001 帧仍可用，但 battery 必须精确为 `{voltage_v:null,quality:"Unknown"}`，显示“电压未接入”。旧 M2-002 只有 battery 能力的帧仍可用，里程计显示“未接入”。模拟帧合同与17帧回放保持原样。
 
 有 capabilities 时 battery 包含 `voltage_v`、`quality`、`received_elapsed_ms`、`source_stamp_ns`、`source_time_raw`。battery 能力为 false 时只能 Unknown/null，三项元数据都必须存在且为 null。能力为 true 而暂无电压时，元数据也全部为 null，quality 不能是 Valid/Stale；Unknown 显示“等待首个有效电压”。有电压时：
 
@@ -94,7 +94,16 @@ stream.id 标识服务会话，stream.source 为显式选择的 mock 或 robot�
 - 同一流的收包时间不得回退；同一收包时间的电压与三项元数据不得突变，质量可变化。收到新样本时允许 ROS 时钟回拨和 MCU 计时重置。空样本不会清除这项防回退记录；新 stream.id 会清空。
 
 电压3秒无新样本时，由 C++ 标记 Stale；状态流仍可每500ms持续。服务/网页只独立判断整体传输是否过期。电压卡片显示本机接收时间、完整 ROS 时间字符串和 MCU 原始计时；整流断开时清空当前数值及元数据，保留已验证事件历史和末帧原始 JSON 供诊断。
-odometry.reading 为 null 或包含 x_m/y_m/yaw_rad/linear_x_mps/linear_y_mps/angular_z_radps 六个有限数字的完整对象。
+声明 odometry 能力后，odometry 包含 `reading`、`quality` 与六项元数据 `received_elapsed_ms`、`source_stamp_ns`、`source_sequence`、`source_twist_sequence`、`frame_id`、`child_frame_id`：
+
+- reading 为 null 或包含 x_m/y_m/yaw_rad/linear_x_mps/linear_y_mps/angular_z_radps 六个有限数字的完整对象。0 位置、0 速度为有效值。
+- capability=false 只能 Unknown/null，全部元数据必须存在且为 null。capability=true 暂无样本时元数据也全部为 null，quality 不能 Valid/Stale；Unknown 显示“等待首个有效里程计”。
+- 有 reading 时所有元数据必须完整。received_elapsed_ms 是 0..frame.elapsed_ms 的安全整数；source_stamp_ns 是 1..UINT64MAX 的规范十进制字符串，显示时不转为浮点数。两个 source sequence 是 0..UINT32MAX 整数，0 有效，且 pose 与 twist 的序号不要求相同。
+- frame_id 固定 odom，child_frame_id 固定 base_link。位姿在 odom、速度在 base_link；本地里程计不是全局定位。C++ 仅输出源时间戳精确配对的完整样本，网页不配对 ROS 消息。
+- 同流接收时间不回退，同次接收的六字段与元数据不能变化，quality 可变为 Stale。空样本仍保留最后一次校验基准；新 stream.id 重置。新接收样本允许 ROS 时钟回拨和两个源序号重启/回绕。
+- 里程计由 C++ 独立判定时效（1500ms 等号过期），网页只显示质量；里程计 Stale 保留历史值，电压和 CPU 仍可 Valid。整个状态流不可用时清空里程计数值及元数据，保留已验证事件历史，恢复要求新的状态序号。
+- telemetry 可带 odometry_pose_topic、odometry_twist_topic，各为字符串或 null。当前来源分别是 `/handsfree/readonly_pose`（geometry_msgs/PoseStamped）和 `/handsfree/readonly_twist`（geometry_msgs/TwistStamped）。源时间戳及两个 seq 完整展示，窄屏可换行。
+
 新增资源字段示例：
 
 ```json
@@ -148,3 +157,80 @@ node web/tests/test_dashboard_client.js
 2026-10-29 M2-001 网页适配离线验收：服务39/39、客户端14/14组通过（包含原29项/9组）；覆盖真实/模拟来源隔离、时间和序号回退、重复轮询不续期、断流清值与保留历史、新流重置、非零退出error及自有子进程清理。固定SSH参数通过离线 `ssh -G` 解析检查。本网页任务未运行机器人、未占用8081、未进行新的浏览器视觉或远程清理实测；主线负责真机最终联调。交接见 `.local/learning-checks/M2-001/web-result.json`。
 
 2026-10-29 M2-002 网页适配离线验收：服务45/45、客户端18/18组通过；增加电池能力、完整元数据、uint64时间字符串、0 V、接收时间防回退与同次收包防篡改、资源独立有效、源时钟重置恢复及新流重置。网页任务未运行 ROS/机器人，也未做新的 Edge 视觉或真机联调；主线继续完成这些验收。交接见 `.local/learning-checks/M2-002/dashboard/web-result.json`。
+
+2026-10-30 M2-003 API7 网页适配离线验收：服务52/52、客户端23/23组通过。实际 headless Edge 156.0.4314.50 对明确标注 OFFLINE 的人工合成 API7 夹具完成19项检查：等待→有效0值→里程计 Stale 且电压/CPU Valid→恢复，完整 uint64 时间戳及两个 uint32 源序号，390/320px 无页面或元数据横向溢出，整流 stale/stopped/error/请求失败/超时清当前数值和元数据、保留已验证历史，新状态序号恢复与新 stream.id 重置。自有浏览器与 loopback 夹具进程已退出、端口已关闭。首次浏览器验收的等待条件过早读取上一帧，已修正并保留该失败记录；没有因此修改生产逻辑。本网页任务未连接 SSH/ROS/机器人，不能作为实机里程计或运动验证。截图、夹具、SHA256、命令与限制见 `.local/learning-checks/M2-003/web-result.json`。
+
+
+## M2-004 局部雷达扫描（API8）
+
+`lidar.js` 负责雷达验证与 Canvas。旧 robot 无 lidar capability 时允许缺 lidar 或严格 `{reading:null,quality:"Unknown"}`；mock 与17帧回放保留原合同，不填造雷达点。能力声明表示订阅能力，不能证明硬件健康。
+
+新 robot 的 lidar 必须有 reading、quality、received_elapsed_ms、source_stamp_ns、source_sequence、frame_id。无 reading 时元数据全 null，质量不能 Valid/Stale；cap=false 时还必须 Unknown。有扫描时 received_elapsed_ms 是不晚于 elapsed_ms 的非负安全整数，stamp 是非零规范 uint64 十进制字符串，seq 是 uint32（0 合法），frame_id 为1..64个 ASCII 字母/数字/下划线/横线/斜线/点。新 robot 必须输出 telemetry.lidar_topic，只能 /scan 或 null；legacy 可缺。
+
+reading 包含 angle_min_rad、angle_max_rad、angle_increment_rad、range_min_m、range_max_m、scan_time_s、time_increment_s 和 ranges_m。全部几何数值有限，角增量非零且允许负向，距离 min>=0、max>min，时间非负。1..4096个距离只允许合法闭区间内的有限数或 null；0 仅在 min=0 时合法。跨度不超过 2π+0.001，末角容差为 max(0.0001,abs(increment)*1.05)；两时间均正时 time_increment*(N-1)<=scan_time+0.001。
+
+同流接收时间不能倒退，同次收包的几何、距离和来源元数据不能更改，quality 可以改变。空样本保留校验基准；新 stream.id 重置。电池、里程计、雷达进度全部验证后一起提交，拒绝一项不会污染其他基准。新收包允许来源时间及计数重置。
+
+画面以传感器局部 X 向上、Y 向左显示离散点，null 保留索引且不绘点、不连线或填充未知区域。未接入、等待首帧、格式有效但全 null、独立 Stale 历史扫描分别显示。Stale 保留历史点，不因其他通道刷新而续期；整体传输失效或请求失败清点和元数据，保留事件，新序号才可恢复。2/5/10/20 m 仅改变显示半径；超范围点裁去，计数仍是整帧有效点/总射线。画布适配实际宽度和 DPR，每次绘制重置像素，避免积累旧点。未做 TF、地图、障碍或安全判断。
+
+离线合成 API8 Edge 验收证据另写 `.local/learning-checks/M2-004/web-result.json`；OFFLINE 截图不能作为实机证据。机器人实读和 native ROS 编译由主线验收。
+
+2026-10-31 M2-004 API8 网页离线验收：服务59/59、客户端29/29组通过；实际 headless Edge 156.0.4314.50 的 OFFLINE 合成夹具38项断言通过，覆盖局部坐标像素、独立 Stale、全 null、4096反向射线、显示半径、DPR2、390/320px、非法帧原子拒绝、断流清点保事件与新流恢复。初次误选旧 mock 的2项失败和受限 sandbox 的 EPERM 已记录；复验全部通过，自有浏览器、夹具进程及 loopback 端口已清理。截图与准确命令见 `.local/learning-checks/M2-004/web-result.json`。本网页任务未连接机器人、SSH、ROS或模型，实机与 native ROS 编译不标通过。
+## M2-005 独立只读相机
+
+相机默认关闭，`/api/state` 继续使用 API8，四个遥测通道不依赖相机。
+`/api/camera` 使用 `camera_api_version:1`，包含 `stream={id,source,status,sequence,age_ms,ttl_ms}`
+及 `frame`。id 是每次服务启动的新 UUID；状态为 disabled/starting/live/stale/stopped/error。
+仅 live 返回 frame；其它状态为 null。source 启用时为 robot_camera，关闭时为 null。
+本机单调接收年龄 age_ms 的 TTL 为 1500 ms，等号过期；主机 read 后墙钟时间仅作元数据。
+
+相机需当前 Python 安装 `tools/camera-requirements.txt` 的 Pillow；缺失会在启动 SSH 前拒绝启用。
+本机 bundled Python 已有 Pillow 12.3.0，当前 Conda Python 没有。选择已有解码库的解释器即可。
+启用参数加在已有只读 robot 命令上（仅在已获准启动真实相机时执行，路径由主线提供）：
+
+```powershell
+python tools/serve_dashboard.py --robot-target USER@HOST --robot-executable /ABS/PATH/robot_state_agent --known-hosts C:/ABS/PATH/known_hosts --robot-camera /ABS/PATH/robot_camera_stream
+```
+
+`--robot-camera` 必须与显式 robot 模式同用；仅接受绝对路径、安全 ASCII 路径段和固定文件名
+robot_camera_stream，不接收设备、任意命令、shell 参数或运动输入。独立 SSH 子进程采用已有固定
+jump/known-hosts 配置，不重试或自动重启；C++ 默认每 500 ms 一帧、60秒正常结束。
+页面 URL 为 `/?mode=live&source=robot`，网页本身不启动相机；结束后显式重开服务才启动新相机流。
+只读相机单通道可将 `--robot-executable ...` 替换为 `--camera-only`；此模式不启动
+robot_state_agent或ROS，原四传感器无数据，不填充假值。仍需robot-target、known-hosts和robot-camera。
+
+协议固定 rs-camera-v1 / robot_camera / Dabai DC1 / /dev/video2 / 320×240 / motion_enabled:false。
+seq 为正安全整数，elapsed_ms 为非负安全整数，两者严格前进；首帧 seq 可因晚接收大于1。
+host_received_unix_ns 是非零规范 uint64 十进制字符串。单行含换行不超过98304字节，JPEG不超过49152字节。
+标准 base64 严格解码并核对长度，Pillow验证 JPEG格式、320×240尺寸及完整解码，拒绝截断图。
+坏帧或EOF立即撤图并结束该接收流；stderr不混stdout。新服务UUID不继承旧图或校验基准。
+源 elapsed 相对首帧与本机单调接收进度落后达到1500ms时拒绝该流，避免中途网络/接收暂停后
+积压旧帧仅靠递增序号续期。初帧之前的传输延迟无法用这两个未同步时钟证明；这是接收时效检查，
+不是曝光新鲜度、光学内容变化或传感器无重复帧的证明。
+
+浏览器串行轮询、独立TTL截止定时器和异步解码代次检查防止旧回包/旧解码恢复过期图；
+请求失败、超时、过期及浏览器解码失败清除图像和元数据，并要求新序号恢复。
+页面离开中止请求、清定时器并回收objectURL，返回后重新等待新帧；模拟回放不请求相机接口。
+
+2026-10-31 用户改为实机优先。本次不新增/运行合成夹具或烟雾测试；
+语法、已有真实静态JPEG解码、后续实际图流浏览器结果分别记录于
+`.local/learning-checks/M2-005/web-result.json`；历史静态图不作为实时证据。
+
+2026-10-31 真实相机网页验收完成：实际 Edge 156.0.4314.50 解码真实 320×240 图流，
+390/320 CSS宽度无溢出，真实生产者 SIGSTOP→TTL撤图→SIGCONT新帧恢复、页面离开资源清理、
+60秒自然EOF撤图通过。最终代码另经8秒真实短流验证，修正相机卡片内边距；无pageerror。
+真实PC接收暂停2秒后，源elapsed进度检查拒绝积压帧，状态error且不返回旧图。
+各轮前后fuser均确认video2空闲，浏览器与自有loopback服务已关闭。仅相机通道，四传感器保持未知；
+没有启动ROS或运动。按用户新规则未新增/运行合成夹具和烟雾测试，原测试保留。
+初帧之前传输延迟、曝光时刻和光学重复帧仍不可证明；未实测物理手机或相机硬件拔插。
+
+2026-10-31 真实相机网页验收完成：实际 Edge 156.0.4314.50 解码真实 320×240 图流，
+390/320 CSS宽度无溢出，真实生产者 SIGSTOP→TTL撤图→SIGCONT新帧恢复、页面离开资源清理、
+60秒自然EOF撤图通过。最终代码另经8秒真实短流验证，修正相机卡片内边距；无pageerror。
+真实PC接收暂停2秒后，源elapsed进度检查拒绝积压帧，状态error且不返回旧图。
+各轮前后fuser均确认video2空闲，浏览器与自有loopback服务已关闭。仅相机通道，四传感器保持未知；
+没有启动ROS或运动。按用户新规则未新增/运行合成夹具和烟雾测试，原测试保留。
+初帧之前传输延迟、曝光时刻和光学重复帧仍不可证明；未实测物理手机或相机硬件拔插。
+
+
+2026-11-01：五路同屏已通过真实短时静止联调，四路Valid与camera live同时有效10条，未执行运动或模拟流程。可选`--ssh-bind-address 本机物理IPv4`仅给中转SSH绑定来源，用于代理虚拟网卡干扰场景；不改变全局网络。实际源IP随网络改变，不能照抄固定地址。验收报告在.local/learning-checks/M2-006/browser-result.json；手机宽度验证不代表物理手机联网通过。

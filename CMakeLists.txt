@@ -24,6 +24,9 @@ add_library(
     cpp/src/event_log.cpp
     cpp/src/linux_resources.cpp
     cpp/src/battery_source.cpp
+    cpp/src/odometry_source.cpp
+    cpp/src/lidar_source.cpp
+    cpp/src/command_dispatcher.cpp
     cpp/src/motion_guard.cpp
     cpp/src/input_mapping.cpp
 )
@@ -75,7 +78,7 @@ target_compile_options(mock_robot_state PRIVATE ${RS_WARNING_OPTIONS})
 enable_testing()
 
 # 创建测试程序, 
-foreach(test_name IN ITEMS robot_state data_freshness battery_state odometry_state system_resources event_log linux_resources battery_source motion_guard input_mapping)
+foreach(test_name IN ITEMS robot_state data_freshness battery_state odometry_state system_resources event_log linux_resources battery_source odometry_source lidar_source motion_guard input_mapping)
     add_executable( # 创建程序. 目标程序命名和源码位置
         test_${test_name}
         cpp/tests/test_${test_name}.cpp
@@ -127,15 +130,33 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_executable(robot_state_agent cpp/apps/robot_state_agent.cpp)
     target_link_libraries(robot_state_agent PRIVATE amr_state Threads::Threads)
     target_compile_options(robot_state_agent PRIVATE ${RS_WARNING_OPTIONS})
-    option(RS_WITH_ROS_BATTERY "Enable read-only ROS1 battery subscription" OFF)
-    if(RS_WITH_ROS_BATTERY)
-        find_package(catkin REQUIRED COMPONENTS roscpp handsfree_msgs)
-        target_compile_definitions(robot_state_agent PRIVATE AMR_WITH_ROS_BATTERY)
+    option(RS_WITH_ROS_BATTERY "Read-only ROS1 battery subscription" OFF)
+    option(RS_WITH_ROS_ODOMETRY "Read-only ROS1 matching pose/twist subscription" OFF)
+    option(RS_WITH_ROS_LIDAR "Read-only ROS1 LaserScan subscription" OFF)
+    if(RS_WITH_ROS_BATTERY OR RS_WITH_ROS_ODOMETRY OR RS_WITH_ROS_LIDAR)
+        set(RS_ROS_COMPONENTS roscpp)
+        if(RS_WITH_ROS_BATTERY)
+            list(APPEND RS_ROS_COMPONENTS handsfree_msgs)
+        endif()
+        if(RS_WITH_ROS_ODOMETRY)
+            list(APPEND RS_ROS_COMPONENTS geometry_msgs)
+        endif()
+        if(RS_WITH_ROS_LIDAR)
+            list(APPEND RS_ROS_COMPONENTS sensor_msgs)
+            target_compile_definitions(robot_state_agent PRIVATE AMR_WITH_ROS_LIDAR)
+        endif()
+        find_package(catkin REQUIRED COMPONENTS ${RS_ROS_COMPONENTS})
+        if(RS_WITH_ROS_BATTERY)
+            target_compile_definitions(robot_state_agent PRIVATE AMR_WITH_ROS_BATTERY)
+        endif()
+        if(RS_WITH_ROS_ODOMETRY)
+            target_compile_definitions(robot_state_agent PRIVATE AMR_WITH_ROS_ODOMETRY)
+        endif()
         target_include_directories(robot_state_agent PRIVATE ${catkin_INCLUDE_DIRS})
         target_link_libraries(robot_state_agent PRIVATE ${catkin_LIBRARIES})
-    # SSH does not source ROS setup. DT_RPATH also resolves transitive ROS libraries.
-    set_property(TARGET robot_state_agent APPEND_STRING PROPERTY LINK_FLAGS " -Wl,--disable-new-dtags")
-    set_property(TARGET robot_state_agent PROPERTY BUILD_RPATH "${catkin_LIBRARY_DIRS}")
+        # DT_RPATH also resolves transitive ROS libraries under ordinary SSH.
+        set_property(TARGET robot_state_agent APPEND_STRING PROPERTY LINK_FLAGS " -Wl,--disable-new-dtags")
+        set_property(TARGET robot_state_agent PROPERTY BUILD_RPATH "${catkin_LIBRARY_DIRS}")
     endif()
 endif()
 
@@ -156,3 +177,19 @@ target_compile_options(mock_teleop PRIVATE ${RS_WARNING_OPTIONS})
 add_test(NAME test_mock_teleop_protocol
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/cpp/tests/test_mock_teleop_protocol.py"
         "$<TARGET_FILE:mock_teleop>")
+
+# Actual paired callback/writer exercised offline; not a native ROS execution test.
+add_test(NAME test_robot_odometry_output
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/cpp/tests/test_robot_odometry_output.py"
+        "${CMAKE_CXX_COMPILER}" "$<TARGET_FILE:amr_state>"
+        --configuration "$<CONFIG>" --output "${CMAKE_BINARY_DIR}/robot_odometry_output.ndjson")
+
+add_test(NAME test_robot_lidar_output
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/cpp/tests/test_robot_lidar_output.py"
+        "${CMAKE_CXX_COMPILER}" "$<TARGET_FILE:amr_state>"
+        --configuration "$<CONFIG>" --output "${CMAKE_BINARY_DIR}/robot_lidar_output.ndjson")
+
+# Browser diagnostic adapter: pure existing C++ mapping, no robot I/O.
+add_executable(input_preview cpp/apps/input_preview.cpp)
+target_link_libraries(input_preview PRIVATE amr_state)
+target_compile_options(input_preview PRIVATE ${RS_WARNING_OPTIONS})

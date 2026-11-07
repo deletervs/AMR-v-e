@@ -9,3 +9,6 @@ Thumbs.db
 
 # Local server source snapshots and generated inspection artifacts.
 /.local/
+
+# Local-only Taobotics vendor learning sources and indexes.
+/reference/taobotics/
