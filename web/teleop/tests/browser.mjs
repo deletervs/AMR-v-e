@@ -10,17 +10,47 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const root = path.resolve(import.meta.dirname, '../../..');
 const output = path.join(root, '.local/learning-checks/M3-001');
 await mkdir(output, { recursive: true });
-const wrapper = `import importlib.util,sys,threading,json\nspec=importlib.util.spec_from_file_location('demo','tools/serve_mock_teleop.py')\nm=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)\nb=m.AgentBridge([sys.argv[1]])\ns=m.TeleopServer(0,b)\nt=threading.Thread(target=s.serve_forever,daemon=True);t.start()\nprint(json.dumps({'url':s.origin,'agent_pid':b.process.pid}),flush=True)\ntry: sys.stdin.readline()\nfinally:\n s.shutdown();s.server_close();t.join();b.close()\n`;
+const wrapper = `
+import importlib.util,sys,threading,json
+spec=importlib.util.spec_from_file_location('demo','tools/serve_mock_teleop.py')
+m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+def open_demo(port=0):
+ b=m.AgentBridge([sys.argv[1]])
+ s=m.TeleopServer(port,b)
+ t=threading.Thread(target=s.serve_forever,daemon=True);t.start()
+ return b,s,t
+def close_demo(b,s,t):
+ s.shutdown();s.server_close();t.join();b.close()
+b,s,t=open_demo()
+print(json.dumps({'url':s.origin,'agent_pid':b.process.pid}),flush=True)
+try:
+ for command in sys.stdin:
+  if command.strip()=='rotate-csrf': s.csrf=m.secrets.token_urlsafe(32)
+  elif command.strip()=='restart-service':
+   port=s.server_port;close_demo(b,s,t);b,s,t=open_demo(port)
+   print(json.dumps({'event':'restarted','agent_pid':b.process.pid}),flush=True)
+  else: break
+finally: close_demo(b,s,t)
+`;
 const python = process.env.PYTHON_EXECUTABLE || (process.platform === 'win32' ? 'python' : 'python3');
 const agentName = process.platform === 'win32' ? 'mock_teleop.exe' : 'mock_teleop';
 const child = spawn(python, ['-u', '-c', wrapper, process.env.MOCK_TELEOP_AGENT || path.join(root, '.local/build/cmake-debug', agentName)], { cwd: root, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
 let stderr = ''; child.stderr.on('data', data => stderr += data);
+const agentPids = []; let restartInfo = null;
 const startup = await new Promise((resolve, reject) => {
   let buffer = ''; const timer = setTimeout(() => reject(new Error(`service startup timeout: ${stderr}`)), 5000);
-  child.stdout.on('data', chunk => { buffer += chunk; if (buffer.includes('\n')) { clearTimeout(timer); resolve(JSON.parse(buffer.split('\n')[0])); } });
+  child.stdout.on('data', chunk => {
+    buffer += chunk;
+    while (buffer.includes('\n')) {
+      const line = buffer.slice(0, buffer.indexOf('\n')); buffer = buffer.slice(buffer.indexOf('\n') + 1);
+      const info = JSON.parse(line); agentPids.push(info.agent_pid);
+      if (info.event === 'restarted') restartInfo = info;
+      else { clearTimeout(timer); resolve(info); }
+    }
+  });
   child.once('exit', code => { clearTimeout(timer); reject(new Error(`service exit ${code}: ${stderr}`)); });
 });
-const evidence = { browser: 'headless Microsoft Edge', actual_cpp_agent: true, synthetic_gamepad: true, startup, checks: [], screenshots: [], console_errors: [] };
+const evidence = { browser: 'headless Microsoft Edge', actual_cpp_agent: true, synthetic_gamepad: true, startup, owned_agent_pids: agentPids, checks: [], screenshots: [], console_errors: [] };
 let browser, expectNetworkErrors = false;
 async function check(name, fn) { await fn(); evidence.checks.push({ name, passed: true }); }
 async function state() { const response = await fetch(startup.url + '/api/state'); return (await response.json()).state; }
@@ -72,6 +102,37 @@ try {
     await page.evaluate(() => window.dispatchEvent(new Event('blur'))); await until(s => !s.armed && s.linear_mps === 0, 'blur release');
     await page.keyboard.up('Shift'); await page.keyboard.up('w');
     await page.evaluate(() => window.dispatchEvent(new Event('focus'))); await page.waitForTimeout(180); assert.equal((await state()).armed, false);
+  });
+  await check('late prior release response cannot revoke a new session or overwrite its display', async () => {
+    await arm(page);
+    let releaseReply, finishRelease;
+    const gate = new Promise(resolve => { finishRelease = resolve; });
+    await page.route('**/api/command', async route => {
+      if (!releaseReply && route.request().postDataJSON()?.action === 'release') {
+        const response = await route.fetch(); releaseReply = await response.json();
+        await gate; await route.fulfill({ response });
+      } else await route.continue();
+    });
+    await page.locator('#release').click(); await until(s => !s.armed, 'release is processed before its delayed response');
+    await arm(page); const session = (await state()).session_id;
+    finishRelease(); await page.waitForTimeout(150); await page.unroute('**/api/command');
+    assert.ok(releaseReply); assert.equal((await state()).session_id, session);
+    assert.match(await page.locator('#arm').innerText(), /本窗口持有/);
+    await unarm(page);
+  });
+  await check('full loopback service and C++ restart change boot, clear control and require manual rearm', async () => {
+    await arm(page); const before = await state();
+    await page.keyboard.down('Shift'); await page.keyboard.down('w'); await until(s => s.linear_mps > 0, 'movement before owned service restart');
+    expectNetworkErrors = true; child.stdin.write('restart-service\n');
+    const deadline = Date.now() + 5000;
+    while (!restartInfo && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
+    assert.ok(restartInfo, 'restarted service acknowledged by test harness');
+    await page.keyboard.up('Shift'); await page.keyboard.up('w');
+    await page.waitForFunction(() => !document.querySelector('#arm').disabled);
+    const after = await state(); assert.notEqual(after.boot_id, before.boot_id);
+    assert.equal(after.armed, false); assert.equal(after.linear_mps, 0); assert.equal(after.angular_radps, 0);
+    assert.equal(await page.locator('.pressed').count(), 0); expectNetworkErrors = false;
+    await arm(page); await unarm(page);
   });
   await check('Space stop latches, clear leaves disarmed', async () => {
     await arm(page); await page.keyboard.press('Space'); await until(s => s.stop_latched && !s.armed, 'software stop');
@@ -136,6 +197,34 @@ try {
     await page.waitForTimeout(300); await page.unroute('**/api/command');
     assert.equal(delayed, true); assert.equal((await state()).armed, false);
   });
+  await check('changed service CSRF token reacquires observation without restoring control', async () => {
+    await arm(page); expectNetworkErrors = true;
+    const oldSession = await (await fetch(startup.url + '/api/session')).json();
+    child.stdin.write('rotate-csrf\n');
+    await until(s => !s.armed && s.linear_mps === 0, 'CSRF change must end control');
+    await page.waitForFunction(() => !document.querySelector('#arm').disabled);
+    const newSession = await (await fetch(startup.url + '/api/session')).json();
+    assert.notEqual(newSession.csrf, oldSession.csrf);
+    assert.equal((await state()).armed, false);
+    expectNetworkErrors = false;
+    await arm(page); await unarm(page); // verifies that the refreshed token works
+  });
+  await check('stalled fetch cannot keep old motion displayed while awaiting its timeout', async () => {
+    await arm(page); await page.keyboard.down('Shift'); await page.keyboard.down('w');
+    await until(s => s.linear_mps > 0, 'moving before stalled request');
+    let blocked = false, unblock;
+    const gate = new Promise(resolve => { unblock = resolve; });
+    await page.route('**/api/command', async route => {
+      if (!blocked && route.request().postDataJSON()?.action === 'keys') { blocked = true; await gate; }
+      await route.continue();
+    });
+    await until(s => !s.armed && s.linear_mps === 0, 'stale watchdog releases while request is pending');
+    assert.equal(blocked, true); assert.match(await page.locator('#linear').innerText(), /^0\.00/);
+    assert.equal(await page.locator('.pressed').count(), 0);
+    unblock(); await page.waitForTimeout(100); await page.unroute('**/api/command');
+    await page.keyboard.up('Shift'); await page.keyboard.up('w');
+    assert.equal((await state()).armed, false);
+  });
   await check('ten second fixed lease ends despite continued neutral renewal', async () => {
     await arm(page);
     // Observe a 10s property at 8Hz. A 50Hz Node observer needlessly competes
@@ -174,6 +263,18 @@ try {
     await mobile.locator('#stop').tap(); await until(s => s.stop_latched && !s.armed, 'mobile stop');
   });
   const screenshot = path.join(output, 'teleop-390px.png'); await mobile.screenshot({ path: screenshot, fullPage: true }); evidence.screenshots.push(screenshot);
+  await check('initial handshake failures clear display and retry observation without reload or arm', async () => {
+    const recovering = await mobileContext.newPage(); let failures = 0;
+    await recovering.route('**/api/session', route => ++failures <= 2 ? route.abort() : route.continue());
+    await recovering.goto(startup.url); await recovering.bringToFront();
+    await recovering.waitForFunction(() => document.querySelector('#owner').textContent === '无有效控制权');
+    assert.equal(await recovering.locator('#lease').innerText(), '—');
+    assert.equal(await recovering.locator('#ttl').innerText(), '—');
+    assert.equal(await recovering.locator('#release').isDisabled(), true);
+    await recovering.waitForFunction(() => document.querySelector('#transport').textContent.includes('C++'));
+    assert.ok(failures >= 3); assert.equal((await state()).armed, false);
+    await recovering.close();
+  });
   assert.deepEqual(evidence.console_errors, []);
   evidence.passed = true;
 } catch (error) {
@@ -184,7 +285,7 @@ try {
   const exited = await Promise.race([once(child, 'exit').then(([code]) => code), new Promise(resolve => setTimeout(() => resolve('timeout'), 5000))]);
   evidence.service_exit_code = exited;
   if (exited === 'timeout') child.kill();
-  try { process.kill(startup.agent_pid, 0); evidence.agent_reaped = false; } catch (error) { evidence.agent_reaped = error.code === 'ESRCH'; }
+  evidence.agent_reaped = agentPids.every(pid => { try { process.kill(pid, 0); return false; } catch (error) { return error.code === 'ESRCH'; } });
   evidence.browser_closed = !!browser;
   evidence.stderr = stderr;
   await writeFile(path.join(output, 'web-browser-result.json'), JSON.stringify(evidence, null, 2));
