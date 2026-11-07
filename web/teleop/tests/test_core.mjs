@@ -1,6 +1,28 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { InputSession, readPad, scaledAxis, randomController, KEY_CODES } from '../core.mjs';
+import { InputSession, readPad, scaledAxis, randomController, KEY_CODES, ResponseOrder } from '../core.mjs';
+test('responses apply once in normal order', () => {
+  const order = new ResponseOrder(); const a = order.begin(); const b = order.begin();
+  assert.equal(order.accept(a), true); assert.equal(order.accept(b), true); assert.equal(order.accept(b), false);
+});
+test('late release response cannot supersede a newer arm response', () => {
+  const order = new ResponseOrder(); const release = order.begin(); const arm = order.begin();
+  assert.equal(order.accept(arm), true); assert.equal(order.current(release), false); assert.equal(order.accept(release), false);
+});
+test('disconnect retires every pending response and allows a new handshake', () => {
+  const order = new ResponseOrder(); const old = order.begin(); order.reset(); const handshake = order.begin();
+  assert.equal(order.accept(old), false); assert.equal(order.accept(handshake), true);
+});
+test('late error from prior service epoch cannot interrupt renewed observation', () => {
+  const order = new ResponseOrder(); const old = order.begin(); order.reset(); order.accept(order.begin());
+  assert.equal(order.current(old), false);
+});
+test('multiple connection losses never reuse retired request identity', () => {
+  const order = new ResponseOrder(); const tickets = [];
+  for (let i = 0; i < 10; i++) { tickets.push(order.begin()); order.reset(); }
+  const latest = order.begin(); for (const ticket of tickets) assert.equal(order.accept(ticket), false);
+  assert.equal(order.accept(latest), true);
+});
 const state = (values = {}) => ({ source: 'mock_teleop', elapsed_ms: 1000, boot_id: '18446744073709551615', session_id: '9007199254740993', controller_id: '9007199254740997', sequence: '0', armed: true, owner: 'keyboard', linear_mps: 0, angular_radps: 0, ...values });
 function ready(source = 'keyboard') {
   let time = 10;

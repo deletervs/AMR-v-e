@@ -44,7 +44,8 @@ namespace
     case MotionResult::x: \
         return #x;
             RS_RESULT(Accepted)
-            RS_RESULT(Armed) RS_RESULT(Released) RS_RESULT(Stopped) RS_RESULT(Cleared)
+            RS_RESULT(Armed)
+            RS_RESULT(Released) RS_RESULT(Stopped) RS_RESULT(Cleared)
                 RS_RESULT(LinkUpdated) RS_RESULT(Busy) RS_RESULT(StopLatched) RS_RESULT(LinkUnavailable)
                     RS_RESULT(InvalidConfig) RS_RESULT(InvalidSource) RS_RESULT(InvalidSession) RS_RESULT(InvalidSequence)
                         RS_RESULT(InvalidWindow) RS_RESULT(InvalidVelocity) RS_RESULT(NeutralRequired) RS_RESULT(ClockRegression)
@@ -61,7 +62,8 @@ namespace
     case StopReason::x: \
         return #x;
             RS_REASON(Disarmed)
-            RS_REASON(WaitingForNeutral) RS_REASON(DeadmanReleased) RS_REASON(None)
+            RS_REASON(WaitingForNeutral)
+            RS_REASON(DeadmanReleased) RS_REASON(None)
                 RS_REASON(CommandExpired) RS_REASON(LeaseExpired) RS_REASON(SoftwareStop) RS_REASON(LinkUnavailable)
                     RS_REASON(InvalidCommand) RS_REASON(ClockRegression) RS_REASON(InvalidConfig)
 #undef RS_REASON
