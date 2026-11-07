@@ -48,6 +48,171 @@ def battery_frame(sequence=1, elapsed=500, **battery_changes):
     return frame
 
 
+def odometry_frame(sequence=1, elapsed=500, **changes):
+    frame = battery_frame(sequence, elapsed)
+    frame["capabilities"]["odometry"] = True
+    frame["odometry"] = dict(reading=dict(READING), quality="Valid", received_elapsed_ms=400,
+                             source_stamp_ns="1793200000123456789", source_sequence=0,
+                             source_twist_sequence=4294967295, frame_id="odom", child_frame_id="base_link")
+    frame["odometry"].update(changes)
+    frame["telemetry"].update(odometry_pose_topic="/handsfree/readonly_pose",
+                              odometry_twist_topic="/handsfree/readonly_twist")
+    return frame
+
+
+def lidar_frame(sequence=1, elapsed=500, **changes):
+    frame = odometry_frame(sequence, elapsed)
+    frame["capabilities"]["lidar"] = True
+    frame["telemetry"]["lidar_topic"] = "/scan"
+    frame["lidar"] = dict(reading=dict(angle_min_rad=-1, angle_max_rad=1, angle_increment_rad=1,
+        range_min_m=0, range_max_m=20, scan_time_s=0.1, time_increment_s=0.01, ranges_m=[1, None, 0]),
+        quality="Valid", received_elapsed_ms=400, source_stamp_ns=str(service.UINT64_MAX),
+        source_sequence=0, frame_id="laser/front-1.0")
+    frame["lidar"].update(changes)
+    return frame
+
+
+def empty_lidar():
+    return dict(reading=None, quality="Unknown", **dict.fromkeys(service.LIDAR_METADATA))
+
+
+class LidarTests(unittest.TestCase):
+    def test_legacy_and_three_boolean_capabilities(self):
+        for frame in (ROBOT_FRAME, battery_frame(), odometry_frame(), lidar_frame(),
+                      dict(ROBOT_FRAME, lidar={"reading": None, "quality": "Unknown"})):
+            service.validate_frame(frame, "robot")
+        for capable in (True, False):
+            frame = lidar_frame(**empty_lidar())
+            frame["capabilities"]["lidar"] = capable
+            service.validate_frame(frame, "robot")
+        for field in ("battery", "odometry", "lidar"):
+            for value in (None, 0, "true", [], {}):
+                frame = lidar_frame()
+                frame["capabilities"][field] = value
+                with self.subTest(field=field, value=value), self.assertRaises(ValueError):
+                    service.validate_frame(frame, "robot")
+        with self.assertRaises(ValueError):
+            service.validate_frame(dict(ROBOT_FRAME, lidar={"reading": None, "quality": "Fault"}), "robot")
+
+    def test_geometry_endpoints_reverse_single_maximum_and_null(self):
+        import math
+        for count, increment in ((1, 0.1), (4096, -2 * math.pi / 4095)):
+            frame = lidar_frame()
+            frame["lidar"]["reading"].update(angle_min_rad=math.pi, angle_increment_rad=increment,
+                angle_max_rad=math.pi + (count - 1) * increment, ranges_m=[None] * count, time_increment_s=0)
+            service.validate_frame(frame, "robot")
+            frame["lidar"]["reading"]["angle_max_rad"] += increment
+            service.validate_frame(frame, "robot")
+        frame = lidar_frame()
+        frame["lidar"]["reading"].update(scan_time_s=0.019, time_increment_s=0.01)
+        service.validate_frame(frame, "robot") # equality at the 1ms tolerance
+        frame["lidar"]["reading"]["angle_max_rad"] = 2.05
+        service.validate_frame(frame, "robot") # exactly 1.05 intervals of endpoint tolerance
+
+    def test_invalid_geometry_distances_and_missing_fields(self):
+        invalid = {"angle_min_rad": (None, True, "0", float("inf"), 10 ** 400),
+            "angle_max_rad": (None, True, 100), "angle_increment_rad": (0, True, None, 10),
+            "range_min_m": (-1, 21, True), "range_max_m": (0, True), "scan_time_s": (-1, True, 0.001),
+            "time_increment_s": (-1, True, 1), "ranges_m": ([], [None] * 4097, [True], [-1], [21], ["1"], [float("nan")])}
+        for field, values in invalid.items():
+            for value in values:
+                frame = lidar_frame()
+                frame["lidar"]["reading"][field] = value
+                with self.subTest(field=field, value=str(value)[:80]), self.assertRaises(ValueError):
+                    service.validate_frame(frame, "robot")
+        for field in service.LIDAR_FIELDS + ("ranges_m",):
+            frame = lidar_frame()
+            del frame["lidar"]["reading"][field]
+            with self.assertRaises(ValueError): service.validate_frame(frame, "robot")
+        frame = lidar_frame()
+        frame["lidar"]["reading"]["range_min_m"] = 0.1
+        with self.assertRaises(ValueError): service.validate_frame(frame, "robot")
+
+    def test_exact_metadata_topic_and_frame_boundaries(self):
+        for stamp in ("1", "9007199254740993", str(service.UINT64_MAX)):
+            for seq in (0, service.UINT32_MAX):
+                service.validate_frame(lidar_frame(source_stamp_ns=stamp, source_sequence=seq, frame_id="a" * 64), "robot")
+        service.validate_frame(lidar_frame(elapsed=service.MAX_SAFE_INTEGER, received_elapsed_ms=service.MAX_SAFE_INTEGER), "robot")
+        invalid = {"received_elapsed_ms": (-1, True, None, 501, 0.5, service.MAX_SAFE_INTEGER + 1),
+            "source_stamp_ns": (None, 0, "0", "01", "1\n", str(service.UINT64_MAX + 1)),
+            "source_sequence": (-1, True, None, "0", 0.5, service.UINT32_MAX + 1),
+            "frame_id": ("", "a" * 65, "激光", "a b", "laser\n", "laser\r", None, True)}
+        for field, values in invalid.items():
+            for value in values:
+                with self.subTest(field=field, value=value), self.assertRaises(ValueError):
+                    service.validate_frame(lidar_frame(**{field: value}), "robot")
+        for field in ("reading", "quality") + service.LIDAR_METADATA:
+            frame = lidar_frame()
+            del frame["lidar"][field]
+            with self.assertRaises(ValueError): service.validate_frame(frame, "robot")
+        for value in (True, 1, {}, "/other"):
+            frame = lidar_frame()
+            frame["telemetry"]["lidar_topic"] = value
+            with self.assertRaises(ValueError): service.validate_frame(frame, "robot")
+        for field in ("telemetry", "lidar_topic"):
+            frame = lidar_frame()
+            if field == "telemetry": del frame[field]
+            else: del frame["telemetry"][field]
+            with self.assertRaises(ValueError): service.validate_frame(frame, "robot")
+
+    def test_empty_and_unconnected_metadata_is_null(self):
+        for quality in service.QUALITIES:
+            frame = lidar_frame(**dict(empty_lidar(), quality=quality))
+            if quality in ("Valid", "Stale"):
+                with self.assertRaises(ValueError): service.validate_frame(frame, "robot")
+            else: service.validate_frame(frame, "robot")
+        for name in service.LIDAR_METADATA:
+            frame = lidar_frame(**dict(empty_lidar(), **{name: lidar_frame()["lidar"][name]}))
+            with self.assertRaises(ValueError): service.validate_frame(frame, "robot")
+        frame = lidar_frame()
+        frame["capabilities"]["lidar"] = False
+        with self.assertRaises(ValueError): service.validate_frame(frame, "robot")
+
+    def test_progress_is_atomic_and_null_frames_retain_guard(self):
+        mutations = [{"received_elapsed_ms": 399}, {"source_stamp_ns": "1"}, {"source_sequence": 1}, {"frame_id": "other"}]
+        for field in service.LIDAR_FIELDS + ("ranges_m",):
+            reading = copy.deepcopy(lidar_frame()["lidar"]["reading"])
+            reading[field] = [2, None, 0] if field == "ranges_m" else reading[field] + 0.00001
+            mutations.append({"reading": reading})
+        for change in mutations:
+            buffer = service.StateBuffer(expected_source="robot")
+            buffer.publish(lidar_frame())
+            buffer.publish(lidar_frame(2, 1000, **empty_lidar()))
+            before = buffer.snapshot()
+            bad = lidar_frame(3, 1500, **change)
+            bad["battery"]["received_elapsed_ms"] = bad["odometry"]["received_elapsed_ms"] = 1400
+            with self.subTest(change=change), self.assertRaises(ValueError): buffer.publish(bad)
+            self.assertEqual(buffer.snapshot()["state"], before["state"])
+            self.assertEqual(buffer.snapshot()["stream"]["sequence"], 2)
+            good = lidar_frame(4, 2000, received_elapsed_ms=1900, source_stamp_ns="1", source_sequence=0)
+            good["battery"]["received_elapsed_ms"] = good["odometry"]["received_elapsed_ms"] = 1300
+            buffer.publish(good)
+            self.assertEqual(buffer.snapshot()["stream"]["sequence"], 3)
+
+    def test_http_wait_valid_stale_all_null_recovery_and_loss(self):
+        buffer = service.StateBuffer(expected_source="robot")
+        server = service.make_server(buffer, ROOT / "web", 0)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        url = "http://127.0.0.1:{}/api/state".format(server.server_address[1])
+        cases = [lidar_frame(1, 500, **empty_lidar()), lidar_frame(2, 1000), lidar_frame(3, 2000, quality="Stale"),
+                 lidar_frame(4, 2500, received_elapsed_ms=2400, source_stamp_ns="1", source_sequence=0)]
+        cases[-1]["lidar"]["reading"]["ranges_m"] = [None] * 3
+        try:
+            for frame in cases:
+                buffer.publish(frame)
+                with urllib.request.urlopen(url, timeout=2) as response: value = json.load(response)
+                self.assertEqual(value["api_version"], 8)
+                self.assertEqual(value["state"]["lidar"], frame["lidar"])
+                for name in ("battery", "odometry", "system_resources"): self.assertEqual(value["state"][name]["quality"], "Valid")
+            buffer.finish()
+            with urllib.request.urlopen(url, timeout=2) as response: value = json.load(response)
+            self.assertEqual(value["stream"]["status"], "stopped")
+            self.assertEqual(value["state"]["event_log"], cases[-1]["event_log"])
+        finally:
+            server.shutdown(); server.server_close(); thread.join(timeout=2)
+
+
 class EventLogTests(unittest.TestCase):
     def frame(self, entries=None, truncated=False, time_ms=0):
         return dict(FRAME, sim_time_ms=time_ms, event_log={
@@ -295,6 +460,129 @@ class BufferTests(unittest.TestCase):
 
 
 class RobotContractTests(unittest.TestCase):
+    def test_odometry_capability_legacy_and_waiting(self):
+        service.validate_frame(ROBOT_FRAME, "robot")
+        service.validate_frame(battery_frame(), "robot")
+        empty = dict(reading=None, quality="Unknown", **dict.fromkeys(service.ODOMETRY_METADATA))
+        for capability in (True, False):
+            frame = odometry_frame(**empty)
+            frame["capabilities"]["odometry"] = capability
+            service.validate_frame(frame, "robot")
+        for capability in (None, 0, 1, "true", [], {}):
+            frame = odometry_frame(**empty)
+            frame["capabilities"]["odometry"] = capability
+            with self.subTest(capability=capability), self.assertRaises(ValueError):
+                service.validate_frame(frame, "robot")
+        frame = odometry_frame()
+        frame["capabilities"]["odometry"] = False
+        with self.assertRaises(ValueError):
+            service.validate_frame(frame, "robot")
+
+    def test_odometry_zero_negative_uint_boundaries_and_topics(self):
+        for stamp in ("1", "9007199254740993", str(service.UINT64_MAX)):
+            frame = odometry_frame(received_elapsed_ms=0, source_stamp_ns=stamp)
+            service.validate_frame(frame, "robot")
+            frame["odometry"]["reading"].update(x_m=-2.5, yaw_rad=-3.14, linear_y_mps=-0.5)
+            frame["odometry"].update(source_sequence=service.UINT32_MAX, source_twist_sequence=0)
+            frame["telemetry"].update(odometry_pose_topic=None, odometry_twist_topic=None)
+            service.validate_frame(frame, "robot")
+        service.validate_frame(odometry_frame(elapsed=service.MAX_SAFE_INTEGER,
+                                            received_elapsed_ms=service.MAX_SAFE_INTEGER), "robot")
+        for name in ("odometry_pose_topic", "odometry_twist_topic"):
+            for value in (0, True, [], {}):
+                frame = odometry_frame()
+                frame["telemetry"][name] = value
+                with self.subTest(topic=name, value=value), self.assertRaises(ValueError):
+                    service.validate_frame(frame, "robot")
+
+    def test_odometry_invalid_or_missing_metadata_and_readings(self):
+        invalid = {
+            "received_elapsed_ms": (-1, True, 1.5, 501, None, service.MAX_SAFE_INTEGER + 1),
+            "source_stamp_ns": (0, 1, True, None, "0", "01", "+1", "-1", "1e3", "1.0", " 1", "1 ",
+                                "1\n", "\u0661", str(service.UINT64_MAX + 1)),
+            "source_sequence": (-1, True, 1.5, None, "0", service.UINT32_MAX + 1),
+            "source_twist_sequence": (-1, True, 1.5, None, "0", service.UINT32_MAX + 1),
+            "frame_id": (None, "map", "base_link", 0), "child_frame_id": (None, "odom", "map", 0),
+        }
+        for name, values in invalid.items():
+            for value in values:
+                with self.subTest(name=name, value=value), self.assertRaises(ValueError):
+                    service.validate_frame(odometry_frame(**{name: value}), "robot")
+        for name in service.ODOMETRY_METADATA:
+            frame = odometry_frame()
+            del frame["odometry"][name]
+            with self.subTest(missing=name), self.assertRaises(ValueError):
+                service.validate_frame(frame, "robot")
+        for name in service.ODOMETRY_FIELDS:
+            for value in (None, True, "0", float("nan"), float("inf"), 10 ** 400):
+                reading = dict(READING, **{name: value})
+                with self.subTest(field=name, value=value), self.assertRaises(ValueError):
+                    service.validate_frame(odometry_frame(reading=reading), "robot")
+            reading = dict(READING)
+            del reading[name]
+            with self.assertRaises(ValueError):
+                service.validate_frame(odometry_frame(reading=reading), "robot")
+
+    def test_odometry_empty_requires_all_null_metadata(self):
+        empty = dict(reading=None, **dict.fromkeys(service.ODOMETRY_METADATA))
+        for quality in service.QUALITIES:
+            frame = odometry_frame(quality=quality, **empty)
+            if quality in ("Valid", "Stale"):
+                with self.assertRaises(ValueError):
+                    service.validate_frame(frame, "robot")
+            else:
+                service.validate_frame(frame, "robot")
+            for name in service.ODOMETRY_METADATA:
+                partial = copy.deepcopy(frame)
+                partial["odometry"][name] = odometry_frame()["odometry"][name]
+                with self.subTest(quality=quality, field=name), self.assertRaises(ValueError):
+                    service.validate_frame(partial, "robot")
+
+    def test_odometry_progress_empty_retention_and_atomic_publish(self):
+        now = [0.0]
+        buffer = service.StateBuffer(expected_source="robot", clock=lambda: now[0])
+        first = odometry_frame()
+        buffer.publish(first)
+        now[0] = 1.0
+        changes = [{"received_elapsed_ms": 399}, {"source_stamp_ns": "1"}, {"source_sequence": 1},
+                   {"source_twist_sequence": 0}]
+        changes += [{"reading": dict(READING, **{name: 0.25})} for name in service.ODOMETRY_FIELDS]
+        for change in changes:
+            bad = odometry_frame(2, 1000, **change)
+            bad["battery"]["received_elapsed_ms"] = 900
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                buffer.publish(bad)
+            self.assertEqual(buffer.snapshot()["state"], first)
+            self.assertEqual(buffer.snapshot()["stream"]["age_ms"], 1000)
+        # A rejected odometry frame must not advance the independent battery guard.
+        buffer.publish(odometry_frame(2, 1000, quality="Stale"))
+        empty = dict(reading=None, quality="Fault", **dict.fromkeys(service.ODOMETRY_METADATA))
+        buffer.publish(odometry_frame(3, 1500, **empty))
+        with self.assertRaises(ValueError):
+            buffer.publish(odometry_frame(4, 2000, received_elapsed_ms=399))
+        # Neither empty nor invalid frames erase the last complete sample baseline.
+        with self.assertRaises(ValueError):
+            buffer.publish(odometry_frame(4, 2000, source_sequence=1))
+
+    def test_odometry_stale_and_source_resets_are_independent(self):
+        buffer = service.StateBuffer(expected_source="robot")
+        buffer.publish(odometry_frame(source_sequence=service.UINT32_MAX))
+        buffer.publish(odometry_frame(2, 2000, quality="Stale", source_sequence=service.UINT32_MAX))
+        state = buffer.snapshot()
+        self.assertEqual(state["stream"]["status"], "live")
+        self.assertEqual(state["state"]["odometry"]["quality"], "Stale")
+        self.assertEqual(state["state"]["battery"]["quality"], "Valid")
+        self.assertEqual(state["state"]["system_resources"]["quality"], "Valid")
+        # New reception may legitimately use a rolled-back ROS clock and both seq=0.
+        buffer.publish(odometry_frame(3, 2500, received_elapsed_ms=2450, source_stamp_ns="1",
+                                      source_sequence=0, source_twist_sequence=0))
+        self.assertEqual(buffer.snapshot()["state"]["odometry"]["quality"], "Valid")
+        new_stream = service.StateBuffer(expected_source="robot")
+        initial = odometry_frame(elapsed=0, received_elapsed_ms=0)
+        initial["battery"]["received_elapsed_ms"] = 0
+        new_stream.publish(initial)
+        self.assertNotEqual(buffer.stream_id, new_stream.stream_id)
+
     def test_battery_capability_empty_and_legacy_contract(self):
         service.validate_frame(ROBOT_FRAME, "robot")
         for capability in (True, False):
@@ -493,11 +781,11 @@ class HttpTests(unittest.TestCase):
             with urllib.request.urlopen(self.base + "api/state", timeout=2) as response:
                 self.assertEqual(response.headers["Cache-Control"], "no-store")
                 snapshot = json.load(response)
-                self.assertEqual(snapshot["api_version"], 6)
+                self.assertEqual(snapshot["api_version"], 8)
                 self.assertEqual(snapshot["stream"]["source"], "mock")
                 self.assertEqual(snapshot["stream"]["sequence"], 1)
                 self.assertEqual(snapshot["state"]["odometry"], FRAME["odometry"])
-        for asset in ("", "app.js", "live.js", "styles.css", "state.ndjson"):
+        for asset in ("", "app.js", "live.js", "lidar.js", "styles.css", "state.ndjson"):
             with urllib.request.urlopen(self.base + asset, timeout=2) as response:
                 self.assertEqual(response.status, 200)
                 self.assertTrue(response.read())
@@ -527,7 +815,7 @@ class HttpTests(unittest.TestCase):
             self.assertEqual(get()["stream"]["status"], "starting")
             buffer.publish(ROBOT_FRAME)
             first = get()
-            self.assertEqual(first["api_version"], 6)
+            self.assertEqual(first["api_version"], 8)
             self.assertEqual(first["stream"]["source"], "robot")
             self.assertEqual(first["state"], ROBOT_FRAME)
             for tick in (0.5, 1.5, 2.0):
@@ -559,11 +847,42 @@ class HttpTests(unittest.TestCase):
                 buffer.publish(battery_frame(sequence, sequence * 2000, **changes))
                 with urllib.request.urlopen(url, timeout=2) as response:
                     value = json.load(response)
-                self.assertEqual(value["api_version"], 6)
+                self.assertEqual(value["api_version"], 8)
                 self.assertEqual(value["stream"]["status"], "live")
                 self.assertEqual(value["state"]["battery"]["quality"], quality)
                 self.assertEqual(value["state"]["system_resources"]["quality"], "Valid")
                 self.assertEqual(value["state"]["battery"]["source_stamp_ns"], changes["source_stamp_ns"])
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_robot_http_odometry_waiting_zero_stale_recovery(self):
+        buffer = service.StateBuffer(expected_source="robot")
+        server = service.make_server(buffer, ROOT / "web", 0)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        url = "http://127.0.0.1:{}/api/state".format(server.server_address[1])
+        cases = [odometry_frame(1, 500, reading=None, quality="Unknown", **dict.fromkeys(service.ODOMETRY_METADATA)),
+                 odometry_frame(2, 1000, source_stamp_ns=str(service.UINT64_MAX)),
+                 odometry_frame(3, 2500, quality="Stale", source_stamp_ns=str(service.UINT64_MAX)),
+                 odometry_frame(4, 3000, received_elapsed_ms=2900, source_stamp_ns="1", source_twist_sequence=0)]
+        try:
+            for frame in cases:
+                buffer.publish(frame)
+                with urllib.request.urlopen(url, timeout=2) as response:
+                    value = json.load(response)
+                self.assertEqual(value["api_version"], 8)
+                self.assertEqual(value["stream"]["status"], "live")
+                self.assertEqual(value["state"]["odometry"], frame["odometry"])
+                self.assertEqual(value["state"]["telemetry"], frame["telemetry"])
+                self.assertEqual(value["state"]["battery"]["quality"], "Valid")
+                self.assertEqual(value["state"]["system_resources"]["quality"], "Valid")
+            buffer.finish()
+            with urllib.request.urlopen(url, timeout=2) as response:
+                value = json.load(response)
+            self.assertEqual(value["stream"]["status"], "stopped")
+            self.assertEqual(value["state"]["event_log"], cases[-1]["event_log"])
         finally:
             server.shutdown()
             server.server_close()

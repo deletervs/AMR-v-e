@@ -1,5 +1,6 @@
 """Local, read-only bridge from a C++ telemetry producer (Python 3.8+)."""
 import argparse
+import ipaddress
 import copy
 import functools
 import json
@@ -11,20 +12,105 @@ from pathlib import Path, PurePosixPath
 import subprocess
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
+try:
+    from http.server import ThreadingHTTPServer
+except ImportError:  # Python3.6 robot-side consumers import only buffer/validation.
+    from http.server import HTTPServer
+    from socketserver import ThreadingMixIn
+    class ThreadingHTTPServer(ThreadingMixIn,HTTPServer):
+        daemon_threads=True
 from urllib.parse import urlsplit
 import uuid
+import sys
+
+# Support both direct CLI execution and consumers loading this module by path.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from camera_stream import CameraBuffer, CameraProducer, require_decoder
 
 ROOT = Path(__file__).resolve().parents[1]
 QUALITIES = {"Unknown", "Valid", "Stale", "Fault", "Unsupported"}
 MAX_LINE = 512 * 1024
-API_VERSION = 6
+API_VERSION = 8
 MAX_SAFE_INTEGER = 9007199254740991
 LOG_LIMIT = 100
 LOG_LEVELS = {"Info", "Warning", "Error"}
 UINT64_MAX = 18446744073709551615
 ODOMETRY_FIELDS = ("x_m", "y_m", "yaw_rad", "linear_x_mps", "linear_y_mps", "angular_z_radps")
 BATTERY_METADATA = ("received_elapsed_ms", "source_stamp_ns", "source_time_raw")
+ODOMETRY_METADATA = ("received_elapsed_ms", "source_stamp_ns", "source_sequence",
+                     "source_twist_sequence", "frame_id", "child_frame_id")
+UINT32_MAX = 4294967295
+LIDAR_FIELDS = ("angle_min_rad", "angle_max_rad", "angle_increment_rad", "range_min_m",
+                "range_max_m", "scan_time_s", "time_increment_s")
+LIDAR_METADATA = ("received_elapsed_ms", "source_stamp_ns", "source_sequence", "frame_id")
+
+
+def validate_robot_lidar(frame):
+    capabilities = frame.get("capabilities", {})
+    lidar = frame.get("lidar")
+    if "lidar" not in capabilities:
+        if "lidar" in frame and lidar != {"reading": None, "quality": "Unknown"}:
+            raise ValueError("legacy robot lidar must be absent or exactly Unknown/null")
+        return
+    if any(type(capabilities.get(name)) is not bool for name in ("battery", "odometry", "lidar")):
+        raise ValueError("API8 robot capabilities require three booleans")
+    telemetry = frame.get("telemetry")
+    if not isinstance(telemetry, dict) or "lidar_topic" not in telemetry:
+        raise ValueError("API8 robot requires lidar telemetry topic")
+    if (not isinstance(lidar, dict) or "reading" not in lidar
+            or type(lidar.get("quality")) is not str or lidar["quality"] not in QUALITIES
+            or any(name not in lidar for name in LIDAR_METADATA)):
+        raise ValueError("missing or invalid lidar fields")
+    reading = lidar["reading"]
+    if not capabilities["lidar"] and (reading is not None or lidar["quality"] != "Unknown"):
+        raise ValueError("unconnected lidar must be Unknown/null")
+    if reading is None:
+        if (lidar["quality"] in ("Valid", "Stale")
+                or any(lidar[name] is not None for name in LIDAR_METADATA)):
+            raise ValueError("missing lidar requires null metadata and unusable quality")
+        return
+    if (not isinstance(reading, dict) or any(not finite_number(reading.get(name)) for name in LIDAR_FIELDS)
+            or type(reading.get("ranges_m")) is not list or not 1 <= len(reading["ranges_m"]) <= 4096):
+        raise ValueError("invalid lidar geometry or ray count")
+    count = len(reading["ranges_m"])
+    increment = reading["angle_increment_rad"]
+    span = (count - 1) * increment
+    end = reading["angle_min_rad"] + span
+    if (increment == 0 or reading["range_min_m"] < 0 or reading["range_max_m"] <= reading["range_min_m"]
+            or reading["scan_time_s"] < 0 or reading["time_increment_s"] < 0
+            or not finite_number(end) or abs(span) > 2 * math.pi + 0.001
+            or abs(end - reading["angle_max_rad"]) > max(0.0001, abs(increment) * 1.05)
+            or (reading["scan_time_s"] > 0 and reading["time_increment_s"] > 0
+                and reading["time_increment_s"] * (count - 1) > reading["scan_time_s"] + 0.001)):
+        raise ValueError("inconsistent lidar geometry or timing")
+    if any(value is not None and (not finite_number(value)
+           or not reading["range_min_m"] <= value <= reading["range_max_m"]) for value in reading["ranges_m"]):
+        raise ValueError("lidar ranges must be legal finite distances or null")
+    received = lidar["received_elapsed_ms"]
+    if type(received) is not int or not 0 <= received <= frame["elapsed_ms"]:
+        raise ValueError("invalid lidar reception time")
+    if uint64_bytes(lidar["source_stamp_ns"], "lidar source stamp") == 0:
+        raise ValueError("lidar source stamp must be positive")
+    if type(lidar["source_sequence"]) is not int or not 0 <= lidar["source_sequence"] <= UINT32_MAX:
+        raise ValueError("invalid lidar source sequence")
+    if type(lidar["frame_id"]) is not str or re.fullmatch(r"[A-Za-z0-9_/.-]{1,64}", lidar["frame_id"]) is None:
+        raise ValueError("invalid lidar frame id")
+
+
+def next_lidar_sample(previous, frame):
+    lidar = frame.get("lidar")
+    if frame["source"] != "robot" or lidar is None or lidar["reading"] is None:
+        return previous
+    if previous is not None:
+        received = lidar["received_elapsed_ms"]
+        if received < previous["received_elapsed_ms"]:
+            raise ValueError("lidar reception time must not regress")
+        if received == previous["received_elapsed_ms"] and (
+                any(lidar[name] != previous[name] for name in LIDAR_METADATA)
+                or lidar["reading"] != previous["reading"]):
+            raise ValueError("same lidar reception time must retain its sample")
+    return lidar
 
 
 def finite_number(value):
@@ -128,6 +214,53 @@ def next_battery_sample(previous, frame):
     return battery
 
 
+def validate_robot_odometry(frame):
+    odometry = frame.get("odometry")
+    capabilities = frame.get("capabilities", {})
+    if "odometry" not in capabilities:
+        if odometry != {"reading": None, "quality": "Unknown"}:
+            raise ValueError("legacy robot odometry must be exactly Unknown/null")
+        return
+    if type(capabilities["odometry"]) is not bool:
+        raise ValueError("invalid robot odometry capability")
+    if not isinstance(odometry, dict) or any(name not in odometry for name in ODOMETRY_METADATA):
+        raise ValueError("missing odometry metadata")
+    reading = odometry.get("reading")
+    if not capabilities["odometry"] and (reading is not None or odometry.get("quality") != "Unknown"):
+        raise ValueError("unconnected odometry must be Unknown/null")
+    if reading is None:
+        if (odometry.get("quality") in ("Valid", "Stale")
+                or any(odometry[name] is not None for name in ODOMETRY_METADATA)):
+            raise ValueError("missing odometry requires null metadata and unusable quality")
+        return
+    received = odometry["received_elapsed_ms"]
+    if type(received) is not int or not 0 <= received <= frame["elapsed_ms"]:
+        raise ValueError("invalid odometry reception time")
+    if uint64_bytes(odometry["source_stamp_ns"], "odometry source stamp") == 0:
+        raise ValueError("odometry source stamp must be positive")
+    for name in ("source_sequence", "source_twist_sequence"):
+        if type(odometry[name]) is not int or not 0 <= odometry[name] <= UINT32_MAX:
+            raise ValueError("invalid odometry source sequence")
+    if odometry["frame_id"] != "odom" or odometry["child_frame_id"] != "base_link":
+        raise ValueError("invalid odometry frames")
+
+
+def next_odometry_sample(previous, frame):
+    """Reception time is monotonic; ROS time and publisher counters may restart."""
+    odometry = frame["odometry"]
+    if frame["source"] != "robot" or odometry["reading"] is None:
+        return previous
+    if previous is not None:
+        received = odometry["received_elapsed_ms"]
+        if received < previous["received_elapsed_ms"]:
+            raise ValueError("odometry reception time must not regress")
+        if received == previous["received_elapsed_ms"] and (
+                any(odometry[name] != previous[name] for name in ODOMETRY_METADATA)
+                or any(odometry["reading"][name] != previous["reading"][name] for name in ODOMETRY_FIELDS)):
+            raise ValueError("same odometry reception time must retain its sample")
+    return odometry
+
+
 def validate_frame(frame, expected_source="mock"):
     if expected_source not in ("mock", "robot"):
         raise ValueError("unknown expected source")
@@ -148,8 +281,15 @@ def validate_frame(frame, expected_source="mock"):
                 or not 1 <= frame["sequence"] <= MAX_SAFE_INTEGER):
             raise ValueError("invalid robot sequence")
         validate_robot_battery(frame)
-        if frame.get("odometry") != {"reading": None, "quality": "Unknown"}:
-            raise ValueError("robot odometry is not connected")
+        validate_robot_odometry(frame)
+        validate_robot_lidar(frame)
+        telemetry = frame.get("telemetry")
+        if isinstance(telemetry, dict):
+            if "lidar_topic" in telemetry and telemetry["lidar_topic"] not in (None, "/scan"):
+                raise ValueError("invalid lidar telemetry topic")
+            for name in ("odometry_pose_topic", "odometry_twist_topic"):
+                if name in telemetry and telemetry[name] is not None and type(telemetry[name]) is not str:
+                    raise ValueError("invalid odometry telemetry topic")
     validate_event_log(frame.get("event_log"), frame[time_field])
     voltage = battery["voltage_v"]
     if voltage is not None and not finite_number(voltage):
@@ -205,6 +345,8 @@ class StateBuffer:
         self._received = None
         self._state = None
         self._battery_sample = None
+        self._odometry_sample = None
+        self._lidar_sample = None
         self._sequence = 0
         self._terminal = None
         self._message = None
@@ -223,8 +365,12 @@ class StateBuffer:
                         and frame["sequence"] <= self._state["sequence"]):
                     raise ValueError("robot sequence must increase")
             battery_sample = next_battery_sample(self._battery_sample, frame)
+            odometry_sample = next_odometry_sample(self._odometry_sample, frame)
+            lidar_sample = next_lidar_sample(self._lidar_sample, frame)
             self._state = copy.deepcopy(frame)
             self._battery_sample = copy.deepcopy(battery_sample)
+            self._odometry_sample = copy.deepcopy(odometry_sample)
+            self._lidar_sample = copy.deepcopy(lidar_sample)
             self._sequence += 1
             self._received = self._clock()
 
@@ -299,19 +445,26 @@ class StateProducer:
 MockProducer = StateProducer
 
 
-def make_server(buffer, web_root, port=8081):
+def make_server(buffer, web_root, port=8081, camera=None):
+    camera = camera if camera is not None else CameraBuffer()
     # Exact allowlist: do not serve the repository, credentials, or directory listings.
     assets = {"/": ("index.html", "text/html; charset=utf-8"),
               "/index.html": ("index.html", "text/html; charset=utf-8"),
               "/styles.css": ("styles.css", "text/css; charset=utf-8"),
               "/app.js": ("app.js", "text/javascript; charset=utf-8"),
               "/live.js": ("live.js", "text/javascript; charset=utf-8"),
+              "/lidar.js": ("lidar.js", "text/javascript; charset=utf-8"),
+              "/camera.js": ("camera.js", "text/javascript; charset=utf-8"),
+              "/execution-banner.js": ("execution-banner.js", "text/javascript; charset=utf-8"),
               "/state.ndjson": ("state.ndjson", "application/x-ndjson; charset=utf-8")}
 
     class Handler(BaseHTTPRequestHandler):
         def _serve(self, head=False):
             path = urlsplit(self.path).path
-            if path == "/api/state":
+            if path == "/api/camera":
+                body = json.dumps(camera.snapshot(), allow_nan=False, separators=(",", ":")).encode()
+                content_type = "application/json; charset=utf-8"
+            elif path == "/api/state":
                 body = json.dumps(buffer.snapshot(), allow_nan=False, separators=(",", ":")).encode()
                 content_type = "application/json; charset=utf-8"
             elif path in assets:
@@ -357,7 +510,7 @@ def default_executable():
     return next((path for path in candidates if path.is_file()), candidates[0])
 
 
-def robot_command(target, jump_host, executable, known_hosts):
+def robot_command(target, jump_host, executable, known_hosts, bind_address=None):
     """Build only the read-only collector command; no remote shell input is accepted."""
     host_pattern = r"(?:[A-Za-z0-9_][A-Za-z0-9_.-]*@)?[A-Za-z0-9][A-Za-z0-9_.-]*"
     if (not isinstance(target, str) or re.fullmatch(host_pattern, target) is None
@@ -385,10 +538,24 @@ def robot_command(target, jump_host, executable, known_hosts):
                "-o", "NumberOfPasswordPrompts=0", "-o", "ServerAliveInterval=5",
                "-o", "ServerAliveCountMax=2"]
     # Explicit options also apply to the jump, which -J alone does not guarantee.
-    proxy = ["ssh", "-T"] + options + ["-W", "%h:%p", jump_host]
+    binding = ["-b", str(ipaddress.IPv4Address(bind_address))] if bind_address else []
+    proxy = ["ssh", "-T"] + binding + options + ["-W", "%h:%p", jump_host]
     proxy_text = subprocess.list2cmdline(proxy) if os.name == "nt" else " ".join(map(shlex.quote, proxy))
     return (["ssh", "-T"] + options + ["-o", "ProxyCommand=" + proxy_text, target,
             "exec " + shlex.quote(executable)])
+
+
+def robot_camera_command(target, jump_host, executable, known_hosts, bind_address=None):
+    # Deliberately narrower than shell quoting: no arguments, whitespace or expansions.
+    if (type(executable) is not str
+            or re.fullmatch(r"/(?:[A-Za-z0-9_-]+/)*robot_camera_stream", executable) is None):
+        raise ValueError("camera path must be absolute safe components ending in robot_camera_stream")
+    if known_hosts is None:
+        raise ValueError("camera requires --known-hosts")
+    command = robot_command(target, jump_host,
+                            str(PurePosixPath(executable).with_name("robot_state_agent")), known_hosts, bind_address)
+    command[-1] = "exec " + executable
+    return command
 
 
 def main():
@@ -399,16 +566,33 @@ def main():
     parser.add_argument("--robot-target", help="explicit robot SSH host or user@host")
     parser.add_argument("--jump-host", default="llmemb-server", help="SSH jump host (default: llmemb-server)")
     parser.add_argument("--robot-executable", help="explicit absolute robot_state_agent path on robot")
+    parser.add_argument("--robot-camera", help="opt in: absolute robot_camera_stream executable on robot")
+    parser.add_argument("--camera-only", action="store_true", help="explicit camera session; leave all API8 telemetry unknown")
     parser.add_argument("--known-hosts", type=Path, help="explicit absolute PC public known_hosts file")
+    parser.add_argument("--ssh-bind-address", help="optional physical IPv4 source for the SSH jump only")
     args = parser.parse_args()
+    if args.ssh_bind_address and args.robot_target is None:
+        parser.error("--ssh-bind-address requires --robot-target")
     if not 1 <= args.port <= 65535:
         parser.error("port must be between 1 and 65535")
     source = "robot" if args.robot_target is not None else "mock"
+    camera_command = None
+    if args.camera_only and (source != "robot" or args.robot_camera is None or args.robot_executable is not None):
+        parser.error("--camera-only requires --robot-target and --robot-camera, without --robot-executable")
+    if args.robot_camera is not None:
+        if source != "robot":
+            parser.error("--robot-camera requires explicit --robot-target")
+        try:
+            require_decoder()
+            camera_command = robot_camera_command(args.robot_target, args.jump_host,
+                                                   args.robot_camera, args.known_hosts, args.ssh_bind_address)
+        except (ValueError, TypeError) as error:
+            parser.error(str(error))
     if source == "robot":
-        if args.mock_executable is not None or args.robot_executable is None or args.known_hosts is None:
+        if args.mock_executable is not None or (args.robot_executable is None and not args.camera_only) or args.known_hosts is None:
             parser.error("robot mode requires --robot-executable and --known-hosts; do not combine --mock-executable")
         try:
-            command = robot_command(args.robot_target, args.jump_host, args.robot_executable, args.known_hosts)
+            command = None if args.camera_only else robot_command(args.robot_target, args.jump_host, args.robot_executable, args.known_hosts, args.ssh_bind_address)
         except ValueError as error:
             parser.error(str(error))
     else:
@@ -419,16 +603,21 @@ def main():
             parser.error("mock executable is missing; build C++ first or pass --mock-executable")
         command = [str(executable), "--stream"]
     buffer = StateBuffer(expected_source=source)
+    camera = CameraBuffer(enabled=camera_command is not None)
     server = None
     producer = None
+    camera_producer = None
     try:
         # Bind first: an occupied port must not leave a producer running.
-        server = make_server(buffer, ROOT / "web", args.port)
+        server = make_server(buffer, ROOT / "web", args.port, camera=camera)
         env = os.environ.copy()
         runtime = Path("C:/msys64/ucrt64/bin")
         if os.name == "nt" and runtime.is_dir():
             env["PATH"] = str(runtime) + os.pathsep + env.get("PATH", "")
-        producer = StateProducer(command, buffer, env)
+        if command is not None:
+            producer = StateProducer(command, buffer, env)
+        if camera_command is not None:
+            camera_producer = CameraProducer(camera_command, camera, env)
         print("Continuous {}: http://127.0.0.1:{}/?mode=live&source={}".format(source, args.port, source), flush=True)
         print("Mock replay: http://127.0.0.1:{}/  | Ctrl+C stops the server and its {} child".format(args.port, source), flush=True)
         server.serve_forever(poll_interval=0.2)
@@ -437,6 +626,8 @@ def main():
     except OSError as error:
         parser.exit(1, "Cannot start local dashboard: {}\n".format(error))
     finally:
+        if camera_producer is not None:
+            camera_producer.close()
         if producer is not None:
             producer.close()
         if server is not None:

@@ -1,0 +1,6 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>机器人本机面板</title><link rel="stylesheet" href="/style.css"></head><body>
+<header><div><small>机器人 · 本机只读面板</small><h1 id="page-title">概览</h1></div><p id="freshness" role="status">等待本机数据</p></header>
+<main id="cards" aria-label="当前页面状态"></main>
+<footer><nav id="navigation" aria-label="页面导航"></nav><button id="exit" title="退出本面板并清理自有服务和浏览器"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 3H4v18h6 M9 12h12 M17 8l4 4-4 4"/></svg><span>退出面板</span></button><button id="power" hidden disabled><span id="power-icon"></span><span>关机</span></button></footer>
+<div id="power-dialog" class="overlay" hidden><section role="dialog" aria-modal="true" aria-labelledby="dialog-title" aria-describedby="power-warning power-result"><h2 id="dialog-title">安全关闭 Linux？</h2><p id="power-warning">请先保存当前工作。确认后向系统请求安全关机，可能需要在系统提示中输入密码完成身份验证。</p><p id="power-result" role="status">尚未提交关机请求</p><div class="dialog-actions"><button id="cancel-power">取消</button><button id="confirm-power" disabled>确认安全关机</button></div></section></div>
+<script type="module" src="/app.mjs"></script></body></html>

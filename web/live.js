@@ -10,17 +10,19 @@ if (liveMode) {
     let receivedAt = null;
     let unavailableSequence = 0;
     let batterySample = null;
+    let odometrySample = null;
+    let lidarSample = null;
     const labels = { starting: "等待数据", stale: "状态流过期", stopped: "状态流停止", error: "上游异常" };
 
     document.getElementById("mode-badge").textContent = robotMode ? "ROBOT · 只读遥测" : "MOCK · 持续模拟";
     document.getElementById("notice-copy").textContent = robotMode ?
-        "Jetson 本机 CPU、内存与可选 CPU 温度；电压按采集能力显示真实 ROS 数据或未接入。里程计和电机状态未接入；采集进程存活不代表底盘在线。此入口未开放控制。" :
+        "Jetson 本机资源；电压、里程计与局部雷达扫描按订阅能力显示 ROS 数据或未接入。能力声明不证明硬件健康。采集进程存活不代表底盘在线。此入口只读。" :
         "正在接收 C++ 程序持续生成的模拟状态。实时更新仅指模拟状态流，尚未连接真实机器人。";
     if (robotMode) {
         const labels = {
-            "stage-label": "M2-002 / Jetson 只读遥测", "source-label": "source: robot",
+            "stage-label": "M2-004 / Jetson 只读遥测", "source-label": "source: robot",
             "connection-label": "采集进程", "motion-label": "控制入口", "motion-detail": "电机状态未接入",
-            "odometry-note": "里程计未接入；当前位置、朝向和速度均未知。",
+            "odometry-note": "位姿在 odom 坐标系，速度在 base_link 机体坐标系；这是本地里程计，不是全局定位。正 yaw 从上方看为逆时针。未接入时保持未知。",
             "resources-title": "Jetson 本机资源", "chart-legend": "电压未接入 / V",
             "resources-note": "真实来源：/proc/stat、/proc/meminfo；温度仅使用 type=CPU-therm 的 thermal zone。温度可未提供。",
             "events-time-note": "时间从采集进程启动开始计算。日志保存在内存中，新状态流会清空历史。",
@@ -56,7 +58,7 @@ if (liveMode) {
 
     function validateEnvelope(value) {
         const stream = value && value.stream;
-        if (!value || value.api_version !== 6 || !stream || stream.source !== expectedSource ||
+        if (!value || value.api_version !== 8 || !stream || stream.source !== expectedSource ||
             !["mock", "robot"].includes(expectedSource) || typeof stream.id !== "string" || !stream.id ||
             !Number.isSafeInteger(stream.sequence) || stream.sequence < 0 ||
             !["starting", "live", "stale", "stopped", "error"].includes(stream.status) ||
@@ -89,6 +91,8 @@ if (liveMode) {
                 receivedAt = null;
                 unavailableSequence = 0;
                 batterySample = null;
+                odometrySample = null;
+                lidarSample = null;
                 player.frames = [];
             }
             if (stream.sequence < sequence) throw new Error("状态序号倒退");
@@ -103,7 +107,12 @@ if (liveMode) {
                         (robotMode && envelope.state.sequence <= previous.sequence))) {
                         throw new Error("采集时间或生产者序号倒退");
                     }
-                    batterySample = nextBatterySample(batterySample, envelope.state);
+                    const nextBattery = nextBatterySample(batterySample, envelope.state);
+                    const nextOdometry = nextOdometrySample(odometrySample, envelope.state);
+                    const nextLidar = nextLidarSample(lidarSample, envelope.state);
+                    batterySample = nextBattery;
+                    odometrySample = nextOdometry;
+                    lidarSample = nextLidar;
                     sequence = stream.sequence;
                     receivedAt = performance.now() - stream.age_ms;
                     player.frames.push(envelope.state);

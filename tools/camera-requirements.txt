@@ -1,0 +1,2 @@
+# Required only for explicitly enabled camera (strict JPEG decode).
+Pillow>=12.1.1,<13

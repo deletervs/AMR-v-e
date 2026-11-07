@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "enabled": false,
+  "operator_confirmed": false,
+  "os_boot_id": null,
+  "binary_sha256": null,
+  "expires_monotonic_ms": null,
+  "driver_node": null
+}

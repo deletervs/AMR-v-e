@@ -1,0 +1,4 @@
+{
+  "state": {"path": "/home/handsfree/.local/share/rs-telemetry/builds/REPLACE/build/robot_state_agent", "sha256": "REPLACE_WITH_REVIEWED_SHA256"},
+  "camera": {"path": "/home/handsfree/.local/share/rs-camera/builds/REPLACE/build/robot_camera_stream", "sha256": "REPLACE_WITH_REVIEWED_SHA256"}
+}

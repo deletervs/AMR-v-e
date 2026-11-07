@@ -1,0 +1,14 @@
+:root{font-family:system-ui,"Microsoft YaHei",sans-serif;color:#deebf7;background:#101c2b;color-scheme:dark}main{max-width:980px;margin:auto;padding:24px}section,.notice{background:#1b3046;border:1px solid #36536e;border-radius:10px;padding:18px;margin:18px 0}p{line-height:1.7}button,select{font:inherit;padding:10px;margin:5px;border:1px solid #7099b9;border-radius:6px;cursor:pointer}#stop{background:#7e303b}output{font:600 22px monospace;color:#9ae1cd}pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:340px;overflow:auto}button:disabled{opacity:.5}#status{color:#f1d89a}
+/* Reserve equal space for live, expired and disconnected messages. */
+#status{height:3.4em;overflow:auto;margin-block:12px 0;box-sizing:border-box}
+#candidate{display:block;height:3.6em;overflow:auto;line-height:1.6;box-sizing:border-box;overflow-wrap:anywhere}
+#candidate{color:#a9b6c4}
+#candidate[data-valid="true"]{color:#9ae1cd}
+#state{height:340px;max-height:none;overflow:auto;box-sizing:border-box;margin-bottom:0;overflow-anchor:none}
+#keys{height:3.4em;overflow:auto;overflow-wrap:anywhere}
+summary{cursor:pointer;padding:8px 0}details{overflow-anchor:none}
+#diagnostic,#raw-keys{height:4em;overflow:auto;overflow-wrap:anywhere;color:#bacbdc}
+.operation{display:flex;flex-wrap:wrap;gap:0 24px;align-items:baseline;min-height:4em;color:#deebf7}
+.operation p{margin:8px 0}#phase{display:inline-block;min-width:12em}#lease{font-variant-numeric:tabular-nums;display:inline-block;min-width:5em}
+#arm-reason,#stop-status{height:3.4em;overflow:auto;line-height:1.7;margin-block:8px 0;overflow-wrap:anywhere}
+#arm-reason{color:#bacbdc}#stop-status{color:#f1d89a}
